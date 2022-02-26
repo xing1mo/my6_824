@@ -13,6 +13,8 @@ import "strings"
 import "unicode"
 import "sort"
 
+//返回每个单词出现的次数和在哪些文件中出现
+
 // The mapping function is called once for each piece of the input.
 // In this framework, the key is the name of the file that is being processed,
 // and the value is the file's contents. The return value should be a slice of
