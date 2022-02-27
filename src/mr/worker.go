@@ -5,7 +5,6 @@ import "log"
 import "net/rpc"
 import "hash/fnv"
 
-
 //
 // Map functions return a slice of KeyValue.
 //
@@ -17,13 +16,12 @@ type KeyValue struct {
 //
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
+//将map中的key进行hash,之后 % NReduce从而选择reduce
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
-
 
 //
 // main/mrworker.go calls this function.
@@ -34,8 +32,28 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	//CallExample()
+	CallJob()
 
+}
+
+func CallJob() {
+	// declare an argument structure.
+	args := ExampleArgs{}
+
+	// fill in the argument(s).
+	args.X = 99
+
+	// declare a reply structure.
+	reply := Job{}
+
+	ok := call("Coordinator.Distribute", &args, &reply)
+	if ok {
+		// reply.Y should be 100.
+		fmt.Printf("reply.InputFile %v\n", reply.InputFile[0])
+	} else {
+		fmt.Printf("call failed!\n")
+	}
 }
 
 //
@@ -73,15 +91,16 @@ func CallExample() {
 // returns false if something goes wrong.
 //
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := coordinatorSock()
-	c, err := rpc.DialHTTP("unix", sockname)
+	client, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
+	//sockname := coordinatorSock()
+	//client, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
-	defer c.Close()
+	defer client.Close()
 
-	err = c.Call(rpcname, args, reply)
+	//客户端进行rpc调用
+	err = client.Call(rpcname, args, reply)
 	if err == nil {
 		return true
 	}

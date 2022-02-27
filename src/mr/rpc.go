@@ -23,7 +23,21 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+//类似枚举类型
+type JobType int
 
+const (
+	MAP    JobType = 1
+	REDUCE JobType = 2
+)
+
+type Job struct {
+	JobType    JobType
+	InputFile  []string
+	JobId      int
+	ReducerNum int
+	//TmpFileList []string
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
@@ -31,6 +45,7 @@ type ExampleReply struct {
 // Athena AFS doesn't support UNIX-domain sockets.
 func coordinatorSock() string {
 	s := "/var/tmp/824-mr-"
+	//返回调用者的数字用户id
 	s += strconv.Itoa(os.Getuid())
 	return s
 }
