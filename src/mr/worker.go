@@ -1,6 +1,14 @@
 package mr
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"sort"
+	"strings"
+	"time"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
@@ -12,6 +20,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -27,30 +43,126 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the coordinator.
-	//CallExample()
-	CallJob()
-
+	redf func(string, []string) string) {
+	for true {
+		job := CallJob()
+		switch job.JobType {
+		case MAP:
+			doMap(mapf, job)
+			fmt.Println("complete mapjob:", &job)
+		case REDUCE:
+			doReduce(redf, job)
+			fmt.Println("complete reducejob:", &job)
+		case WaittingJob:
+			time.Sleep(1 * time.Second)
+		case KillJob:
+			return
+		default:
+			panic(fmt.Sprintf("unexpected jobType %v", job.JobType))
+		}
+	}
 }
 
-func CallJob() {
+func reduceName(mapIdx, reduceIdx int) string {
+	return fmt.Sprintf("mr-%d-%d", mapIdx, reduceIdx)
+}
+func mergeName(reduceIdx int) string {
+	return fmt.Sprintf("mr-out-%d", reduceIdx+1)
+}
+func doMap(mapf func(string, string) []KeyValue, job *Job) {
+	intermediate := []KeyValue{}
+	//执行完mapf操作
+	for _, filename := range job.InputFile {
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Fatalf("cannot open %v", filename)
+		}
+		content, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Fatalf("cannot read %v", filename)
+		}
+		file.Close()
+		kva := mapf(filename, string(content))
+		intermediate = append(intermediate, kva...)
+	}
+	sort.Sort(ByKey(intermediate))
+
+	//将所有key,value分给ReducerNum个文件
+	distriKV := make([][]KeyValue, job.ReducerNum)
+	for _, kv := range intermediate {
+		tmp := ihash(kv.Key) % job.ReducerNum
+		distriKV[tmp] = append(distriKV[tmp], kv)
+	}
+
+	for idx, l := range distriKV {
+		fileName := reduceName(job.JobId, idx)
+		ofile, _ := os.Create(fileName)
+		enc := json.NewEncoder(ofile)
+		for _, kv := range l {
+			if err := enc.Encode(&kv); err != nil {
+				log.Fatalf("encodeErr-%v", err)
+			}
+		}
+		ofile.Close()
+	}
+	CallDone(job)
+}
+func doReduce(redf func(string, []string) string, job *Job) {
+	maps := make(map[string][]string)
+	//从该reduce对应的所有文件中读取数据(每个map都可能有生成)
+	for idx := 1; idx <= job.MapNum; idx++ {
+		fileName := reduceName(idx, job.ReduceSeq)
+		file, err := os.Open(fileName)
+		if err != nil {
+			fmt.Printf("%v", err)
+			continue
+		}
+
+		//将文件中的json数据解码
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			if _, ok := maps[kv.Key]; !ok {
+				maps[kv.Key] = make([]string, 0, 100)
+			}
+			maps[kv.Key] = append(maps[kv.Key], kv.Value)
+		}
+	}
+
+	res := make([]string, 0, 100)
+	for k, v := range maps {
+		res = append(res, fmt.Sprintf("%v %v\n", k, redf(k, v)))
+	}
+
+	if err := ioutil.WriteFile(mergeName(job.ReduceSeq), []byte(strings.Join(res, "")), 0600); err != nil {
+		fmt.Printf("%v", err)
+	}
+	CallDone(job)
+}
+
+func CallJob() *Job {
 	// declare an argument structure.
 	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
 
 	// declare a reply structure.
 	reply := Job{}
 
-	ok := call("Coordinator.Distribute", &args, &reply)
+	call("Coordinator.Distribute", &args, &reply)
+	//if ok {
+	//	fmt.Printf("call success,reduceSeq:%v\n", reply.ReduceSeq)
+	//} else {
+	//	fmt.Printf("call failed!\n")
+	//}
+	return &reply
+}
+func CallDone(job *Job) {
+	reply := ExampleReply{}
+	ok := call("Coordinator.JobIsDone", job, &reply)
 	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.InputFile %v\n", reply.InputFile[0])
+		fmt.Printf("job complete: %v\n", job.JobId)
 	} else {
 		fmt.Printf("call failed!\n")
 	}

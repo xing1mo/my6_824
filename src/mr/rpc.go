@@ -27,16 +27,19 @@ type ExampleReply struct {
 type JobType int
 
 const (
-	MAP    JobType = 1
-	REDUCE JobType = 2
+	MAP         JobType = 1
+	REDUCE      JobType = 2
+	WaittingJob JobType = 3
+	KillJob     JobType = 4
 )
 
 type Job struct {
 	JobType    JobType
 	InputFile  []string
 	JobId      int
+	ReduceSeq  int
+	MapNum     int
 	ReducerNum int
-	//TmpFileList []string
 }
 
 // Cook up a unique-ish UNIX-domain socket name

@@ -71,8 +71,10 @@ rm -f mr-out*
 
 echo '***' Starting wc test.
 
+# &:后台运行
 $TIMEOUT ../mrcoordinator ../pg*txt &
 pid=$!
+#后台运行的最后一个进程的ID号
 
 # give the coordinator time to create the sockets.
 sleep 1
