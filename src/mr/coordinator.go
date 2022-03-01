@@ -77,8 +77,8 @@ func (j *JobMetaHolder) checkJobDone() bool {
 			}
 		}
 	}
-	fmt.Printf("%d/%d map jobs are done, %d/%d reduce job are done\n",
-		mapDoneNum, mapDoneNum+mapUndoneNum, reduceDoneNum, reduceDoneNum+reduceUndoneNum)
+	//fmt.Printf("%d/%d map jobs are done, %d/%d reduce job are done\n",
+	//	mapDoneNum, mapDoneNum+mapUndoneNum, reduceDoneNum, reduceDoneNum+reduceUndoneNum)
 
 	return (reduceDoneNum > 0 && reduceUndoneNum == 0) || (mapDoneNum > 0 && mapUndoneNum == 0)
 }
@@ -103,6 +103,7 @@ type Coordinator struct {
 	//coordinator状态
 	CoordinatorCondition Condition
 
+	mu1 sync.Mutex
 	//元数据管理相关
 	jobMetaHolder JobMetaHolder
 }
@@ -117,9 +118,13 @@ func (c Coordinator) generateJobId() int {
 func (c *Coordinator) nextPhase() {
 	if c.CoordinatorCondition == MapPhase {
 		c.makeReduceJobs()
+		c.mu1.Lock()
 		c.CoordinatorCondition = ReducePhase
+		c.mu1.Unlock()
 	} else if c.CoordinatorCondition == ReducePhase {
+		c.mu1.Lock()
 		c.CoordinatorCondition = AllDone
+		c.mu1.Unlock()
 	}
 }
 
@@ -140,7 +145,7 @@ func (c *Coordinator) makeMapJobs(files []string) {
 		}
 		c.jobMetaHolder.putJob(&jobMetaINfo)
 
-		fmt.Println("making map job :", &job)
+		//fmt.Println("making map job :", &job)
 		c.JobChannelMap <- &job
 
 	}
@@ -165,7 +170,7 @@ func (c *Coordinator) makeReduceJobs() {
 			JobPtr:    &job,
 		}
 		c.jobMetaHolder.putJob(&jobMetaINfo)
-		fmt.Println("making reduce job :", &job)
+		//fmt.Println("making reduce job :", &job)
 		c.JobChannelReduce <- &job
 	}
 	fmt.Println("done making reduce jobs")
@@ -176,7 +181,7 @@ func (c *Coordinator) makeReduceJobs() {
 func (c *Coordinator) Distribute(args *ExampleArgs, reply *Job) error {
 	mu.Lock()
 	defer mu.Unlock()
-	fmt.Println("coordinator get a request from worker :")
+	//fmt.Println("coordinator get a request from worker :")
 	if c.CoordinatorCondition == MapPhase {
 		if len(c.JobChannelMap) > 0 {
 			*reply = *<-c.JobChannelMap
@@ -232,7 +237,7 @@ func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
 		//prevent a duplicated work which returned from another worker
 		if ok && meta.condition == JobWorking {
 			meta.condition = JobDone
-			fmt.Printf("Reduce task on %d complete\n", args.JobId)
+			//fmt.Printf("Reduce task on %d complete\n", args.JobId)
 		} else {
 			fmt.Println("[duplicated] job done", args.JobId)
 		}
@@ -282,7 +287,8 @@ func (c *Coordinator) server() {
 //
 func (c *Coordinator) Done() bool {
 	ret := false
-
+	c.mu1.Lock()
+	defer c.mu1.Unlock()
 	// Your code here.
 	if c.CoordinatorCondition == AllDone {
 		ret = true

@@ -49,10 +49,10 @@ func Worker(mapf func(string, string) []KeyValue,
 		switch job.JobType {
 		case MAP:
 			doMap(mapf, job)
-			fmt.Println("complete mapjob:", &job)
+			//fmt.Println("complete mapjob:", &job)
 		case REDUCE:
 			doReduce(redf, job)
-			fmt.Println("complete reducejob:", &job)
+			//fmt.Println("complete reducejob:", &job)
 		case WaittingJob:
 			time.Sleep(1 * time.Second)
 		case KillJob:
@@ -160,12 +160,12 @@ func CallJob() *Job {
 }
 func CallDone(job *Job) {
 	reply := ExampleReply{}
-	ok := call("Coordinator.JobIsDone", job, &reply)
-	if ok {
-		fmt.Printf("job complete: %v\n", job.JobId)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
+	call("Coordinator.JobIsDone", job, &reply)
+	//if ok {
+	//	fmt.Printf("job complete: %v\n", job.JobId)
+	//} else {
+	//	fmt.Printf("call failed!\n")
+	//}
 }
 
 //
