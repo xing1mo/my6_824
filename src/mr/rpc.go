@@ -14,8 +14,8 @@ import "strconv"
 // and reply for an RPC.
 //
 
-type ExampleArgs struct {
-	X int
+type Request struct {
+	WorkId int
 }
 
 type ExampleReply struct {
@@ -40,6 +40,10 @@ type Job struct {
 	ReduceSeq  int
 	MapNum     int
 	ReducerNum int
+	WorkId     int
+
+	Name  []string
+	RNAME []string
 }
 
 // Cook up a unique-ish UNIX-domain socket name

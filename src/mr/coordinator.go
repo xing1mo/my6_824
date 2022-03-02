@@ -3,6 +3,7 @@ package mr
 import (
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -21,6 +22,7 @@ const (
 type JobMetaInfo struct {
 	condition JobCondition
 	StartTime time.Time
+	WordId    int
 	JobPtr    *Job
 }
 type JobMetaHolder struct {
@@ -131,6 +133,8 @@ func (c *Coordinator) checkJobCrash(jobId int) {
 			if time.Since(jobMetaInfo.StartTime) > c.MaxTaskWorkTime {
 				DPrintf("crash job %d", jobId)
 				jobMetaInfo.condition = JobWaiting
+				//置空
+				jobMetaInfo.WordId = 0
 				if jobMetaInfo.JobPtr.JobType == MAP {
 					c.JobChannelMap <- jobMetaInfo.JobPtr
 				} else {
@@ -216,13 +220,16 @@ func (c *Coordinator) makeReduceJobs() {
 }
 
 //work请求任务分发
-func (c *Coordinator) Distribute(args *ExampleArgs, reply *Job) error {
+func (c *Coordinator) Distribute(request *Request, reply *Job) error {
 	mu.Lock()
 	defer mu.Unlock()
 	DPrintf("--coordinator get a request from worker--")
 	if c.CoordinatorCondition == MapPhase {
 		if len(c.JobChannelMap) > 0 {
 			*reply = *<-c.JobChannelMap
+			reply.WorkId = request.WorkId
+			_, jobMeta := c.jobMetaHolder.getJobMetaInfo(reply.JobId)
+			jobMeta.WordId = reply.WorkId
 			if !c.jobMetaHolder.fireTheJob(reply.JobId) {
 				fmt.Printf("[duplicated job id]job %d is running\n", reply.JobId)
 			}
@@ -236,6 +243,9 @@ func (c *Coordinator) Distribute(args *ExampleArgs, reply *Job) error {
 	} else if c.CoordinatorCondition == ReducePhase {
 		if len(c.JobChannelReduce) > 0 {
 			*reply = *<-c.JobChannelReduce
+			reply.WorkId = request.WorkId
+			_, jobMeta := c.jobMetaHolder.getJobMetaInfo(reply.JobId)
+			jobMeta.WordId = reply.WorkId
 			//fmt.Println(reply.ReduceSeq)
 			if !c.jobMetaHolder.fireTheJob(reply.JobId) {
 				fmt.Printf("[duplicated job id]job %d is running\n", reply.JobId)
@@ -262,7 +272,10 @@ func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
 	case MAP:
 		ok, meta := c.jobMetaHolder.getJobMetaInfo(args.JobId)
 		//prevent a duplicated work which returned from another worker
-		if ok && meta.condition == JobWorking {
+		if ok && meta.condition == JobWorking && meta.WordId == args.WorkId {
+			for i := 0; i < len(args.Name); i++ {
+				os.Rename(args.Name[i], args.RNAME[i])
+			}
 			meta.condition = JobDone
 			mu1.Unlock()
 			DPrintf("Map task on %d complete\n", args.JobId)
@@ -273,7 +286,10 @@ func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
 	case REDUCE:
 		ok, meta := c.jobMetaHolder.getJobMetaInfo(args.JobId)
 		//prevent a duplicated work which returned from another worker
-		if ok && meta.condition == JobWorking {
+		if ok && meta.condition == JobWorking && meta.WordId == args.WorkId {
+			for i := 0; i < len(args.Name); i++ {
+				os.Rename(args.Name[i], args.RNAME[i])
+			}
 			meta.condition = JobDone
 			mu1.Unlock()
 			DPrintf("Reduce task on %d complete\n", args.JobId)
@@ -293,10 +309,10 @@ func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
 // the RPC argument and reply types are defined in rpc.go.
 //
 //模拟一个协调者被调用的方法
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
+//func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
+//	reply.Y = args.X + 1
+//	return nil
+//}
 
 //
 // start a thread that listens for RPCs from worker.go

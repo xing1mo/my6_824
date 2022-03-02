@@ -95,8 +95,11 @@ func doMap(mapf func(string, string) []KeyValue, job *Job) {
 	}
 
 	for idx, l := range distriKV {
-		fileName := reduceName(job.JobId, idx)
-		ofile, _ := os.Create(fileName)
+		tprname := reduceName(job.JobId, idx)
+		tpname := fmt.Sprintf("%v-%v", tprname, job.WorkId)
+		job.RNAME = append(job.RNAME, tprname)
+		job.Name = append(job.Name, tpname)
+		ofile, _ := os.Create(tpname)
 		enc := json.NewEncoder(ofile)
 		//enc.SetEscapeHTML(false)
 		for _, kv := range l {
@@ -108,6 +111,7 @@ func doMap(mapf func(string, string) []KeyValue, job *Job) {
 	}
 	CallDone(job)
 }
+
 func doReduce(redf func(string, []string) string, job *Job) {
 	maps := make(map[string][]string)
 	//从该reduce对应的所有文件中读取数据(每个map都可能有生成)
@@ -137,8 +141,12 @@ func doReduce(redf func(string, []string) string, job *Job) {
 	for k, v := range maps {
 		res = append(res, fmt.Sprintf("%v %v\n", k, redf(k, v)))
 	}
+	tprname := mergeName(job.ReduceSeq)
+	tpname := fmt.Sprintf("%v-%v", job.RNAME, job.WorkId)
+	job.RNAME = append(job.RNAME, tprname)
+	job.Name = append(job.Name, tpname)
 
-	if err := ioutil.WriteFile(mergeName(job.ReduceSeq), []byte(strings.Join(res, "")), 0600); err != nil {
+	if err := ioutil.WriteFile(tpname, []byte(strings.Join(res, "")), 0600); err != nil {
 		fmt.Printf("%v", err)
 	}
 	CallDone(job)
@@ -146,7 +154,7 @@ func doReduce(redf func(string, []string) string, job *Job) {
 
 func CallJob() *Job {
 	// declare an argument structure.
-	args := ExampleArgs{}
+	args := Request{WorkId: os.Getpid()}
 
 	// declare a reply structure.
 	//设置初始值防止master已退出
@@ -175,29 +183,29 @@ func CallDone(job *Job) {
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
-}
+//func CallExample() {
+//
+//	// declare an argument structure.
+//	args := ExampleArgs{}
+//
+//	// fill in the argument(s).
+//	args.X = 99
+//
+//	// declare a reply structure.
+//	reply := ExampleReply{}
+//
+//	// send the RPC request, wait for the reply.
+//	// the "Coordinator.Example" tells the
+//	// receiving server that we'd like to call
+//	// the Example() method of struct Coordinator.
+//	ok := call("Coordinator.Example", &args, &reply)
+//	if ok {
+//		// reply.Y should be 100.
+//		fmt.Printf("reply.Y %v\n", reply.Y)
+//	} else {
+//		fmt.Printf("call failed!\n")
+//	}
+//}
 
 //
 // send an RPC request to the coordinator, wait for the response.
