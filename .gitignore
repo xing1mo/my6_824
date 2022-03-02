@@ -2,5 +2,5 @@ pkg/
 api.key
 .api.key.trimmed
 *-handin.tar.gz
-mr-out-*
+mr-*
 .idea
