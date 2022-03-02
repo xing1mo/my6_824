@@ -27,10 +27,10 @@ type ExampleReply struct {
 type JobType int
 
 const (
-	MAP         JobType = 1
-	REDUCE      JobType = 2
-	WaittingJob JobType = 3
-	KillJob     JobType = 4
+	MAP        JobType = 1
+	REDUCE     JobType = 2
+	WaitingJob JobType = 3
+	KillJob    JobType = 4
 )
 
 type Job struct {

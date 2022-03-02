@@ -28,6 +28,8 @@ type JobMetaHolder struct {
 }
 
 func (j *JobMetaHolder) putJob(JobInfo *JobMetaInfo) bool {
+	mu1.Lock()
+	defer mu1.Unlock()
 	jobId := JobInfo.JobPtr.JobId
 	meta, _ := j.MetaMap[jobId]
 	if meta != nil {
@@ -49,6 +51,8 @@ func (j *JobMetaHolder) getJobMetaInfo(jobId int) (bool, *JobMetaInfo) {
 
 //使job转入工作阶段
 func (j *JobMetaHolder) fireTheJob(jobId int) bool {
+	mu1.Lock()
+	defer mu1.Unlock()
 	ok, jobInfo := j.getJobMetaInfo(jobId)
 	if !ok || jobInfo.condition != JobWaiting {
 		return false
@@ -58,6 +62,8 @@ func (j *JobMetaHolder) fireTheJob(jobId int) bool {
 	return true
 }
 func (j *JobMetaHolder) checkJobDone() bool {
+	mu1.RLock()
+	defer mu1.RUnlock()
 	reduceDoneNum := 0
 	reduceUndoneNum := 0
 	mapDoneNum := 0
@@ -77,8 +83,8 @@ func (j *JobMetaHolder) checkJobDone() bool {
 			}
 		}
 	}
-	//fmt.Printf("%d/%d map jobs are done, %d/%d reduce job are done\n",
-	//	mapDoneNum, mapDoneNum+mapUndoneNum, reduceDoneNum, reduceDoneNum+reduceUndoneNum)
+	DPrintf("%d/%d map jobs are done, %d/%d reduce job are done\n",
+		mapDoneNum, mapDoneNum+mapUndoneNum, reduceDoneNum, reduceDoneNum+reduceUndoneNum)
 
 	return (reduceDoneNum > 0 && reduceUndoneNum == 0) || (mapDoneNum > 0 && mapUndoneNum == 0)
 }
@@ -99,31 +105,64 @@ type Coordinator struct {
 	JobChannelReduce chan *Job
 	ReducerNum       int
 	MapNum           int
-	//uniqueJobId      int
+
 	//coordinator状态
 	CoordinatorCondition Condition
 
-	mu1 sync.Mutex
+	//多久检查任务崩溃
+	CrashTimeCheck  time.Duration
+	MaxTaskWorkTime time.Duration
+
 	//元数据管理相关
 	jobMetaHolder JobMetaHolder
 }
 
 // Your code here -- RPC handlers for the worker to call.
 
+//检查任务崩溃
+func (c *Coordinator) checkJobCrash(jobId int) {
+	for true {
+		mu1.RLock()
+		_, jobMetaInfo := c.jobMetaHolder.getJobMetaInfo(jobId)
+		//DPrintf("checkCrash:%v", *jobMetaInfo)
+		switch jobMetaInfo.condition {
+		case JobWaiting:
+		case JobWorking:
+			if time.Since(jobMetaInfo.StartTime) > c.MaxTaskWorkTime {
+				DPrintf("crash job %d", jobId)
+				jobMetaInfo.condition = JobWaiting
+				if jobMetaInfo.JobPtr.JobType == MAP {
+					c.JobChannelMap <- jobMetaInfo.JobPtr
+				} else {
+					c.JobChannelReduce <- jobMetaInfo.JobPtr
+				}
+			}
+		case JobDone:
+			mu1.RUnlock()
+			return
+		default:
+			panic(fmt.Sprintf("panic checkJobCrash %v,unexpect condition", jobId))
+		}
+		mu1.RUnlock()
+		time.Sleep(c.CrashTimeCheck)
+	}
+}
 func (c *Coordinator) generateJobId() int {
 	idNum++
 	return idNum
 }
 
 func (c *Coordinator) nextPhase() {
-	c.mu1.Lock()
+	mu.Lock()
 	if c.CoordinatorCondition == MapPhase {
-		c.makeReduceJobs()
 		c.CoordinatorCondition = ReducePhase
+		mu.Unlock()
+		c.makeReduceJobs()
 	} else if c.CoordinatorCondition == ReducePhase {
 		c.CoordinatorCondition = AllDone
+		mu.Unlock()
 	}
-	c.mu1.Unlock()
+
 }
 
 //Coordinator制作map任务，在一开始程序运行的时候就执行
@@ -143,11 +182,11 @@ func (c *Coordinator) makeMapJobs(files []string) {
 		}
 		c.jobMetaHolder.putJob(&jobMetaINfo)
 
-		//fmt.Println("making map job :", &job)
+		DPrintf("making map job :", &job)
 		c.JobChannelMap <- &job
-
+		go c.checkJobCrash(job.JobId)
 	}
-	fmt.Println("done making map jobs")
+	DPrintf("done making map jobs")
 	c.jobMetaHolder.checkJobDone()
 }
 
@@ -168,8 +207,9 @@ func (c *Coordinator) makeReduceJobs() {
 			JobPtr:    &job,
 		}
 		c.jobMetaHolder.putJob(&jobMetaINfo)
-		//fmt.Println("making reduce job :", &job)
+		DPrintf("making reduce job :", &job)
 		c.JobChannelReduce <- &job
+		go c.checkJobCrash(job.JobId)
 	}
 	fmt.Println("done making reduce jobs")
 	c.jobMetaHolder.checkJobDone()
@@ -179,24 +219,21 @@ func (c *Coordinator) makeReduceJobs() {
 func (c *Coordinator) Distribute(args *ExampleArgs, reply *Job) error {
 	mu.Lock()
 	defer mu.Unlock()
-	c.mu1.Lock()
-	//fmt.Println("coordinator get a request from worker :")
+	DPrintf("--coordinator get a request from worker--")
 	if c.CoordinatorCondition == MapPhase {
-		c.mu1.Unlock()
 		if len(c.JobChannelMap) > 0 {
 			*reply = *<-c.JobChannelMap
 			if !c.jobMetaHolder.fireTheJob(reply.JobId) {
 				fmt.Printf("[duplicated job id]job %d is running\n", reply.JobId)
 			}
 		} else {
-			reply.JobType = WaittingJob
+			reply.JobType = WaitingJob
 			if c.jobMetaHolder.checkJobDone() {
-				c.nextPhase()
+				go c.nextPhase()
 			}
 			return nil
 		}
 	} else if c.CoordinatorCondition == ReducePhase {
-		c.mu1.Unlock()
 		if len(c.JobChannelReduce) > 0 {
 			*reply = *<-c.JobChannelReduce
 			//fmt.Println(reply.ReduceSeq)
@@ -204,9 +241,9 @@ func (c *Coordinator) Distribute(args *ExampleArgs, reply *Job) error {
 				fmt.Printf("[duplicated job id]job %d is running\n", reply.JobId)
 			}
 		} else {
-			reply.JobType = WaittingJob
+			reply.JobType = WaitingJob
 			if c.jobMetaHolder.checkJobDone() {
-				c.nextPhase()
+				go c.nextPhase()
 			}
 			return nil
 		}
@@ -220,15 +257,15 @@ func (c *Coordinator) Distribute(args *ExampleArgs, reply *Job) error {
 func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
 	mu.Lock()
 	defer mu.Unlock()
+	mu1.Lock()
 	switch args.JobType {
 	case MAP:
 		ok, meta := c.jobMetaHolder.getJobMetaInfo(args.JobId)
 		//prevent a duplicated work which returned from another worker
 		if ok && meta.condition == JobWorking {
 			meta.condition = JobDone
-			//if args.JobType == MAP {
-			//	fmt.Printf("Map task on %d complete\n", args.JobId)
-			//}
+			mu1.Unlock()
+			DPrintf("Map task on %d complete\n", args.JobId)
 		} else {
 			fmt.Println("[duplicated] job done", args.JobId)
 		}
@@ -238,7 +275,8 @@ func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
 		//prevent a duplicated work which returned from another worker
 		if ok && meta.condition == JobWorking {
 			meta.condition = JobDone
-			//fmt.Printf("Reduce task on %d complete\n", args.JobId)
+			mu1.Unlock()
+			DPrintf("Reduce task on %d complete\n", args.JobId)
 		} else {
 			fmt.Println("[duplicated] job done", args.JobId)
 		}
@@ -288,12 +326,12 @@ func (c *Coordinator) server() {
 //
 func (c *Coordinator) Done() bool {
 	ret := false
-	c.mu1.Lock()
+	mu.RLock()
 	// Your code here.
 	if c.CoordinatorCondition == AllDone {
 		ret = true
 	}
-	c.mu1.Unlock()
+	mu.RUnlock()
 	return ret
 }
 
@@ -303,13 +341,16 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 var idNum int
-var mu sync.Mutex
+var mu sync.RWMutex
+var mu1 sync.RWMutex
 
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{JobChannelMap: make(chan *Job, 20),
 		jobMetaHolder:        JobMetaHolder{make(map[int]*JobMetaInfo, 20)},
 		JobChannelReduce:     make(chan *Job, 20),
 		ReducerNum:           nReduce,
+		CrashTimeCheck:       time.Second * 5,
+		MaxTaskWorkTime:      time.Second * 10,
 		CoordinatorCondition: MapPhase}
 	idNum = 0
 	// Your code here.

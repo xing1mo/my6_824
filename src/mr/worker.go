@@ -49,11 +49,11 @@ func Worker(mapf func(string, string) []KeyValue,
 		switch job.JobType {
 		case MAP:
 			doMap(mapf, job)
-			//fmt.Println("complete mapjob:", &job)
+			DPrintf("complete mapjob:", &job)
 		case REDUCE:
 			doReduce(redf, job)
-			//fmt.Println("complete reducejob:", &job)
-		case WaittingJob:
+			DPrintf("complete reducejob:", &job)
+		case WaitingJob:
 			time.Sleep(1 * time.Second)
 		case KillJob:
 			return
@@ -98,6 +98,7 @@ func doMap(mapf func(string, string) []KeyValue, job *Job) {
 		fileName := reduceName(job.JobId, idx)
 		ofile, _ := os.Create(fileName)
 		enc := json.NewEncoder(ofile)
+		//enc.SetEscapeHTML(false)
 		for _, kv := range l {
 			if err := enc.Encode(&kv); err != nil {
 				log.Fatalf("encodeErr-%v", err)
@@ -148,7 +149,8 @@ func CallJob() *Job {
 	args := ExampleArgs{}
 
 	// declare a reply structure.
-	reply := Job{}
+	//设置初始值防止master已退出
+	reply := Job{JobType: KillJob}
 
 	call("Coordinator.Distribute", &args, &reply)
 	//if ok {
