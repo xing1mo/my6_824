@@ -110,22 +110,20 @@ type Coordinator struct {
 
 // Your code here -- RPC handlers for the worker to call.
 
-func (c Coordinator) generateJobId() int {
+func (c *Coordinator) generateJobId() int {
 	idNum++
 	return idNum
 }
 
 func (c *Coordinator) nextPhase() {
+	c.mu1.Lock()
 	if c.CoordinatorCondition == MapPhase {
 		c.makeReduceJobs()
-		c.mu1.Lock()
 		c.CoordinatorCondition = ReducePhase
-		c.mu1.Unlock()
 	} else if c.CoordinatorCondition == ReducePhase {
-		c.mu1.Lock()
 		c.CoordinatorCondition = AllDone
-		c.mu1.Unlock()
 	}
+	c.mu1.Unlock()
 }
 
 //Coordinator制作map任务，在一开始程序运行的时候就执行
@@ -181,8 +179,10 @@ func (c *Coordinator) makeReduceJobs() {
 func (c *Coordinator) Distribute(args *ExampleArgs, reply *Job) error {
 	mu.Lock()
 	defer mu.Unlock()
+	c.mu1.Lock()
 	//fmt.Println("coordinator get a request from worker :")
 	if c.CoordinatorCondition == MapPhase {
+		c.mu1.Unlock()
 		if len(c.JobChannelMap) > 0 {
 			*reply = *<-c.JobChannelMap
 			if !c.jobMetaHolder.fireTheJob(reply.JobId) {
@@ -196,6 +196,7 @@ func (c *Coordinator) Distribute(args *ExampleArgs, reply *Job) error {
 			return nil
 		}
 	} else if c.CoordinatorCondition == ReducePhase {
+		c.mu1.Unlock()
 		if len(c.JobChannelReduce) > 0 {
 			*reply = *<-c.JobChannelReduce
 			//fmt.Println(reply.ReduceSeq)
@@ -288,11 +289,11 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	ret := false
 	c.mu1.Lock()
-	defer c.mu1.Unlock()
 	// Your code here.
 	if c.CoordinatorCondition == AllDone {
 		ret = true
 	}
+	c.mu1.Unlock()
 	return ret
 }
 
