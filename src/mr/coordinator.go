@@ -43,6 +43,8 @@ func (j *JobMetaHolder) putJob(JobInfo *JobMetaInfo) bool {
 	return true
 }
 func (j *JobMetaHolder) getJobMetaInfo(jobId int) (bool, *JobMetaInfo) {
+	mu1.RLock()
+	defer mu1.RUnlock()
 	meta, _ := j.MetaMap[jobId]
 	if meta == nil {
 		return false, nil
@@ -53,9 +55,10 @@ func (j *JobMetaHolder) getJobMetaInfo(jobId int) (bool, *JobMetaInfo) {
 
 //使job转入工作阶段
 func (j *JobMetaHolder) fireTheJob(jobId int) bool {
+
+	ok, jobInfo := j.getJobMetaInfo(jobId)
 	mu1.Lock()
 	defer mu1.Unlock()
-	ok, jobInfo := j.getJobMetaInfo(jobId)
 	if !ok || jobInfo.condition != JobWaiting {
 		return false
 	}
@@ -124,8 +127,8 @@ type Coordinator struct {
 //检查任务崩溃
 func (c *Coordinator) checkJobCrash(jobId int) {
 	for true {
-		mu1.RLock()
 		_, jobMetaInfo := c.jobMetaHolder.getJobMetaInfo(jobId)
+		mu1.Lock()
 		//DPrintf("checkCrash:%v", *jobMetaInfo)
 		switch jobMetaInfo.condition {
 		case JobWaiting:
@@ -142,12 +145,12 @@ func (c *Coordinator) checkJobCrash(jobId int) {
 				}
 			}
 		case JobDone:
-			mu1.RUnlock()
+			mu1.Unlock()
 			return
 		default:
 			panic(fmt.Sprintf("panic checkJobCrash %v,unexpect condition", jobId))
 		}
-		mu1.RUnlock()
+		mu1.Unlock()
 		time.Sleep(c.CrashTimeCheck)
 	}
 }
@@ -185,7 +188,6 @@ func (c *Coordinator) makeMapJobs(files []string) {
 			JobPtr:    &job,
 		}
 		c.jobMetaHolder.putJob(&jobMetaINfo)
-
 		DPrintf("making map job :", &job)
 		c.JobChannelMap <- &job
 		go c.checkJobCrash(job.JobId)
@@ -267,17 +269,17 @@ func (c *Coordinator) Distribute(request *Request, reply *Job) error {
 func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
 	mu.Lock()
 	defer mu.Unlock()
-	mu1.Lock()
 	switch args.JobType {
 	case MAP:
 		ok, meta := c.jobMetaHolder.getJobMetaInfo(args.JobId)
+		mu1.Lock()
+		defer mu1.Unlock()
 		//prevent a duplicated work which returned from another worker
 		if ok && meta.condition == JobWorking && meta.WordId == args.WorkId {
 			for i := 0; i < len(args.Name); i++ {
 				os.Rename(args.Name[i], args.RNAME[i])
 			}
 			meta.condition = JobDone
-			mu1.Unlock()
 			DPrintf("Map task on %d complete\n", args.JobId)
 		} else {
 			fmt.Println("[duplicated] job done", args.JobId)
@@ -285,13 +287,15 @@ func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
 		break
 	case REDUCE:
 		ok, meta := c.jobMetaHolder.getJobMetaInfo(args.JobId)
+		mu1.Lock()
+		defer mu1.Unlock()
 		//prevent a duplicated work which returned from another worker
 		if ok && meta.condition == JobWorking && meta.WordId == args.WorkId {
 			for i := 0; i < len(args.Name); i++ {
 				os.Rename(args.Name[i], args.RNAME[i])
 			}
 			meta.condition = JobDone
-			mu1.Unlock()
+
 			DPrintf("Reduce task on %d complete\n", args.JobId)
 		} else {
 			fmt.Println("[duplicated] job done", args.JobId)
@@ -323,13 +327,13 @@ func (c *Coordinator) server() {
 
 	// 将 RPC 服务绑定到 HTTP 服务中去
 	rpc.HandleHTTP()
-	l, e := net.Listen("tcp", ":1234")
+	//l, e := net.Listen("tcp", ":1234")
 
-	//sockname := coordinatorSock()
-	//os.Remove(sockname)
+	sockname := coordinatorSock()
+	os.Remove(sockname)
 
 	//unix进程间通信
-	//l, e := net.Listen("unix", sockname)
+	l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
