@@ -49,10 +49,10 @@ func Worker(mapf func(string, string) []KeyValue,
 		switch job.JobType {
 		case MAP:
 			doMap(mapf, job)
-			DPrintf("complete mapjob:", &job)
+			//DPrintf("complete mapjob:", job)
 		case REDUCE:
 			doReduce(redf, job)
-			DPrintf("complete reducejob:", &job)
+			//DPrintf("complete reducejob:", job)
 		case WaitingJob:
 			time.Sleep(1 * time.Second)
 		case KillJob:
@@ -142,7 +142,7 @@ func doReduce(redf func(string, []string) string, job *Job) {
 		res = append(res, fmt.Sprintf("%v %v\n", k, redf(k, v)))
 	}
 	tprname := mergeName(job.ReduceSeq)
-	tpname := fmt.Sprintf("%v-%v", job.RNAME, job.WorkId)
+	tpname := fmt.Sprintf("%v-%v", tprname, job.WorkId)
 	job.RNAME = append(job.RNAME, tprname)
 	job.Name = append(job.Name, tpname)
 

@@ -55,7 +55,6 @@ func (j *JobMetaHolder) getJobMetaInfo(jobId int) (bool, *JobMetaInfo) {
 
 //使job转入工作阶段
 func (j *JobMetaHolder) fireTheJob(jobId int) bool {
-
 	ok, jobInfo := j.getJobMetaInfo(jobId)
 	mu1.Lock()
 	defer mu1.Unlock()
@@ -66,7 +65,7 @@ func (j *JobMetaHolder) fireTheJob(jobId int) bool {
 	jobInfo.StartTime = time.Now()
 	return true
 }
-func (j *JobMetaHolder) checkJobDone() bool {
+func (j *JobMetaHolder) checkJobDone(phase Condition) bool {
 	mu1.RLock()
 	defer mu1.RUnlock()
 	reduceDoneNum := 0
@@ -91,7 +90,14 @@ func (j *JobMetaHolder) checkJobDone() bool {
 	DPrintf("%d/%d map jobs are done, %d/%d reduce job are done\n",
 		mapDoneNum, mapDoneNum+mapUndoneNum, reduceDoneNum, reduceDoneNum+reduceUndoneNum)
 
-	return (reduceDoneNum > 0 && reduceUndoneNum == 0) || (mapDoneNum > 0 && mapUndoneNum == 0)
+	if phase == MapPhase {
+		return (mapDoneNum > 0 && mapUndoneNum == 0)
+	} else if phase == ReducePhase {
+		return (reduceDoneNum > 0 && reduceUndoneNum == 0)
+	} else {
+		return false
+	}
+
 }
 
 type Condition int
@@ -134,15 +140,17 @@ func (c *Coordinator) checkJobCrash(jobId int) {
 		case JobWaiting:
 		case JobWorking:
 			if time.Since(jobMetaInfo.StartTime) > c.MaxTaskWorkTime {
-				DPrintf("crash job %d", jobId)
 				jobMetaInfo.condition = JobWaiting
-				//置空
-				jobMetaInfo.WordId = 0
+
 				if jobMetaInfo.JobPtr.JobType == MAP {
 					c.JobChannelMap <- jobMetaInfo.JobPtr
+					DPrintf("crash:Map jobId--%d-- of worker--%d--", jobId, jobMetaInfo.WordId)
 				} else {
 					c.JobChannelReduce <- jobMetaInfo.JobPtr
+					DPrintf("crash:Map jobId--%d-- of worker--%d--", jobId, jobMetaInfo.WordId)
 				}
+				//置空
+				jobMetaInfo.WordId = 0
 			}
 		case JobDone:
 			mu1.Unlock()
@@ -165,9 +173,11 @@ func (c *Coordinator) nextPhase() {
 		c.CoordinatorCondition = ReducePhase
 		mu.Unlock()
 		c.makeReduceJobs()
+		DPrintf("------------------ReducePhase-----------------------")
 	} else if c.CoordinatorCondition == ReducePhase {
 		c.CoordinatorCondition = AllDone
 		mu.Unlock()
+		DPrintf("------------------AllDone-----------------------")
 	}
 
 }
@@ -193,7 +203,7 @@ func (c *Coordinator) makeMapJobs(files []string) {
 		go c.checkJobCrash(job.JobId)
 	}
 	DPrintf("done making map jobs")
-	c.jobMetaHolder.checkJobDone()
+	c.jobMetaHolder.checkJobDone(MapPhase)
 }
 
 //Coordinator制作reduce任务，在转为reduce阶段后执行
@@ -218,87 +228,94 @@ func (c *Coordinator) makeReduceJobs() {
 		go c.checkJobCrash(job.JobId)
 	}
 	fmt.Println("done making reduce jobs")
-	c.jobMetaHolder.checkJobDone()
+	c.jobMetaHolder.checkJobDone(ReducePhase)
 }
 
 //work请求任务分发
 func (c *Coordinator) Distribute(request *Request, reply *Job) error {
-	mu.Lock()
-	defer mu.Unlock()
+	mu2.Lock()
+	defer mu2.Unlock()
+	mu.RLock()
 	DPrintf("--coordinator get a request from worker--")
 	if c.CoordinatorCondition == MapPhase {
+		mu.RUnlock()
 		if len(c.JobChannelMap) > 0 {
 			*reply = *<-c.JobChannelMap
 			reply.WorkId = request.WorkId
 			_, jobMeta := c.jobMetaHolder.getJobMetaInfo(reply.JobId)
 			jobMeta.WordId = reply.WorkId
+			DPrintf("Map Job--%d-- distribute to worker--%d--", reply.JobId, reply.WorkId)
 			if !c.jobMetaHolder.fireTheJob(reply.JobId) {
 				fmt.Printf("[duplicated job id]job %d is running\n", reply.JobId)
 			}
 		} else {
 			reply.JobType = WaitingJob
-			if c.jobMetaHolder.checkJobDone() {
-				go c.nextPhase()
+			if c.jobMetaHolder.checkJobDone(MapPhase) {
+				c.nextPhase()
 			}
 			return nil
 		}
 	} else if c.CoordinatorCondition == ReducePhase {
+		mu.RUnlock()
 		if len(c.JobChannelReduce) > 0 {
 			*reply = *<-c.JobChannelReduce
 			reply.WorkId = request.WorkId
 			_, jobMeta := c.jobMetaHolder.getJobMetaInfo(reply.JobId)
 			jobMeta.WordId = reply.WorkId
-			//fmt.Println(reply.ReduceSeq)
+			DPrintf("Reduce Job--%d-- distribute to worker--%d--", reply.JobId, reply.WorkId)
 			if !c.jobMetaHolder.fireTheJob(reply.JobId) {
 				fmt.Printf("[duplicated job id]job %d is running\n", reply.JobId)
 			}
 		} else {
 			reply.JobType = WaitingJob
-			if c.jobMetaHolder.checkJobDone() {
-				go c.nextPhase()
+			if c.jobMetaHolder.checkJobDone(ReducePhase) {
+				c.nextPhase()
 			}
 			return nil
 		}
 	} else {
+		mu.RUnlock()
 		reply.JobType = KillJob
 	}
 	return nil
 }
 
 //woker完成任务
-func (c *Coordinator) JobIsDone(args *Job, reply *ExampleReply) error {
+func (c *Coordinator) JobIsDone(job *Job, reply *ExampleReply) error {
 	mu.Lock()
 	defer mu.Unlock()
-	switch args.JobType {
+	switch job.JobType {
 	case MAP:
-		ok, meta := c.jobMetaHolder.getJobMetaInfo(args.JobId)
+		ok, meta := c.jobMetaHolder.getJobMetaInfo(job.JobId)
 		mu1.Lock()
 		defer mu1.Unlock()
 		//prevent a duplicated work which returned from another worker
-		if ok && meta.condition == JobWorking && meta.WordId == args.WorkId {
-			for i := 0; i < len(args.Name); i++ {
-				os.Rename(args.Name[i], args.RNAME[i])
+		DPrintf("JobWantDone:Map task on jobId--%d-- complete by worker--%d--\n", job.JobId, job.WorkId)
+		if ok && meta.condition == JobWorking && meta.WordId == job.WorkId {
+			for i := 0; i < len(job.Name); i++ {
+				os.Rename(job.Name[i], job.RNAME[i])
 			}
 			meta.condition = JobDone
-			DPrintf("Map task on %d complete\n", args.JobId)
+			DPrintf("JobHasDone:Map task on jobId--%d-- complete by worker--%d--\n", job.JobId, job.WorkId)
 		} else {
-			fmt.Println("[duplicated] job done", args.JobId)
+			fmt.Println("[duplicated] job done", job.JobId)
 		}
 		break
 	case REDUCE:
-		ok, meta := c.jobMetaHolder.getJobMetaInfo(args.JobId)
+		ok, meta := c.jobMetaHolder.getJobMetaInfo(job.JobId)
 		mu1.Lock()
 		defer mu1.Unlock()
 		//prevent a duplicated work which returned from another worker
-		if ok && meta.condition == JobWorking && meta.WordId == args.WorkId {
-			for i := 0; i < len(args.Name); i++ {
-				os.Rename(args.Name[i], args.RNAME[i])
+		DPrintf("JobWantDone:Reduce task on jobId--%d-- complete by worker--%d--\n", job.JobId, job.WorkId)
+		if ok && meta.condition == JobWorking && meta.WordId == job.WorkId {
+			for i := 0; i < len(job.Name); i++ {
+				os.Rename(job.Name[i], job.RNAME[i])
 			}
 			meta.condition = JobDone
 
-			DPrintf("Reduce task on %d complete\n", args.JobId)
+			DPrintf("JobHasDone:Reduce task on jobId--%d-- complete by worker--%d--\n", job.JobId, job.WorkId)
 		} else {
-			fmt.Println("[duplicated] job done", args.JobId)
+			fmt.Println("[duplicated] job done", job.JobId)
 		}
 		break
 	default:
@@ -362,14 +379,14 @@ func (c *Coordinator) Done() bool {
 //
 var idNum int
 var mu sync.RWMutex
-var mu1 sync.RWMutex
+var mu1, mu2 sync.RWMutex
 
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{JobChannelMap: make(chan *Job, 20),
 		jobMetaHolder:        JobMetaHolder{make(map[int]*JobMetaInfo, 20)},
 		JobChannelReduce:     make(chan *Job, 20),
 		ReducerNum:           nReduce,
-		CrashTimeCheck:       time.Second * 5,
+		CrashTimeCheck:       time.Second * 2,
 		MaxTaskWorkTime:      time.Second * 10,
 		CoordinatorCondition: MapPhase}
 	idNum = 0
