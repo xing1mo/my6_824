@@ -32,7 +32,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("--RV_Request--:Candidate-%v try to get from %v", args.CandidateId, rf.me)
+	DPrintf("--RV_Request--:Candidate-%v try to get from %v,CandidateTerm-%v,myTerm-%v,hasVote-%v", args.CandidateId, rf.me, args.Term, rf.cureentTerm, rf.votedFor)
 	//获得最后log
 	lastLog := rf.log.getLast()
 	var lastLogIndex, lastLogTerm int
@@ -46,6 +46,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	//判断是否需要投票
 	if args.Term > rf.cureentTerm {
+		if rf.role != Follower {
+			rf.role = Follower
+			DPrintf("--RoleChange--:%v change to Follower because --get RV_RPC more Term from Candidate-%v--", rf.me, args.CandidateId)
+		}
 		rf.cureentTerm = args.Term
 		rf.votedFor = -1
 	}
@@ -131,20 +135,19 @@ func (rf *Raft) doElection() {
 				reply := RequestVoteReply{}
 				f := rf.sendRequestVote(idx, &args, &reply)
 				cond.L.Lock()
+				rf.mu.Lock()
 				if f {
-					rf.mu.Lock()
 					if reply.VoteGranted {
 						voteCnt++
 						DPrintf("--RV_Response--:%v getVote from %v", rf.me, idx)
 					} else {
 						DPrintf("--RV_Response--:%v rejectedVote from %v", rf.me, idx)
 					}
-
-					rf.mu.Unlock()
 				} else {
 					DPrintf("--RV_Response--:%v can't receive response from %v", rf.me, idx)
 				}
 				finishCnt++
+				rf.mu.Unlock()
 				cond.L.Unlock()
 				//DPrintf("--finish--:%v finish vote", rf.me)
 				cond.Broadcast()
@@ -152,8 +155,10 @@ func (rf *Raft) doElection() {
 		}
 	}
 
-	//等待选票数够或者所有机器都完成了
+	rf.mu.Lock()
 	DPrintf("--wait--:%v wait vote,vote-%v,finish-%v", rf.me, voteCnt, finishCnt)
+	rf.mu.Unlock()
+	//等待选票数够或者所有机器都完成了
 	cond.L.Lock()
 	for voteCnt < len(rf.peers)/2+1 && finishCnt < len(rf.peers) {
 		cond.Wait()
