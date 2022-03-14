@@ -121,11 +121,17 @@ func (rf *Raft) doElection() {
 
 				cond.L.Lock()
 				rf.mu.Lock()
+				if rf.role != Candidate {
+					done = true
+					//通知结束选举
+					cond.Broadcast()
+				}
 				if done {
 					rf.mu.Unlock()
 					cond.L.Unlock()
 					return
 				}
+
 				if f {
 					if reply.VoteGranted {
 						voteCnt++
@@ -152,13 +158,16 @@ func (rf *Raft) doElection() {
 	cond.L.Lock()
 	for voteCnt < len(rf.peers)/2+1 && finishCnt < len(rf.peers) {
 		cond.Wait()
+		if done {
+			return
+		}
 		DPrintf("[%v]--wait--:wait vote,vote-%v,finish-%v", rf.me, voteCnt, finishCnt)
 	}
 	cond.L.Unlock()
 
 	rf.mu.Lock()
 	done = true
-	if voteCnt >= len(rf.peers)/2+1 {
+	if voteCnt >= len(rf.peers)/2+1 && rf.role == Candidate {
 		rf.becomeLeaderL()
 	} else {
 		DPrintf("[%v]--RoleChange--:change to Follower because --Vote Failed", rf.me)

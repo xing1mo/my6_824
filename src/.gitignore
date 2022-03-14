@@ -10,3 +10,7 @@ mrtmp.*
 /main/mrcoordinator
 /main/mrsequential
 /main/mrworker
+/raft/test-*.log
+/raft/test-*.err
+/raft/tester
+/raft/tmp.txt
