@@ -30,7 +30,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("--AE_Request--:LeaderId-%v try to append %v,LeaderTerm-%v,myTerm-%v", args.LeaderId, rf.me, args.Term, rf.cureentTerm)
+	DPrintf("[%v]--AE_Request--:Leader try to append %v,LeaderTerm-%v,myTerm-%v", args.LeaderId, rf.me, args.Term, rf.cureentTerm)
 
 	if args.Term < rf.cureentTerm {
 		//Reply false if term < currentTerm
@@ -50,11 +50,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		//min(leaderCommit, index of last new entry)
 	} else {
 		if args.Term > rf.cureentTerm && rf.role != Follower {
-			DPrintf("--RoleChange--:%v change to Follower because --get AE_RPC more Term from Leader-%v--", rf.me, args.LeaderId)
+			DPrintf("[%v]--RoleChange--:change to Follower because --get AE_RPC more Term from Leader-%v--", rf.me, args.LeaderId)
 			rf.role = Follower
 		}
 		rf.cureentTerm = args.Term
-		rf.resetElectionTime()
+		rf.resetElectionTimeL()
 		reply.Success = true
 	}
 	reply.Term = rf.cureentTerm
@@ -66,9 +66,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 //发送一个entry,可以是各种类型
-func (rf *Raft) doAppendEntry(aeType AppendEntriesType) {
-	rf.mu.Lock()
-
+func (rf *Raft) doAppendEntryL(aeType AppendEntriesType) {
 	//初始化args
 	args := AppendEntriesArgs{
 		Term:         rf.cureentTerm,
@@ -76,15 +74,7 @@ func (rf *Raft) doAppendEntry(aeType AppendEntriesType) {
 		LeaderCommit: rf.commitIndex,
 		AEType:       aeType,
 	}
-
-	lastLog := rf.log.getLast()
-	if lastLog == nil {
-		args.PrevLogIndex = 0
-		args.PrevLogTerm = 0
-	} else {
-		args.PrevLogIndex = lastLog.Index
-		args.PrevLogTerm = lastLog.Term
-	}
+	args.PrevLogTerm, args.PrevLogIndex = rf.log.getLastTermAndIndexL()
 
 	if aeType == NOOP {
 		//添加一个空Log
@@ -104,12 +94,12 @@ func (rf *Raft) doAppendEntry(aeType AppendEntriesType) {
 					rf.mu.Lock()
 					if reply.Success == false {
 						//
-						DPrintf("--AE_Response--:%v fail append to %v,myTerm_%v,replyTerm_%v", rf.me, idx, rf.cureentTerm, reply.Term)
+						DPrintf("[%v]--AE_Response--:fail append to %v,myTerm_%v,replyTerm_%v", rf.me, idx, rf.cureentTerm, reply.Term)
 					} else {
-						DPrintf("--AE_Response--:%v success append to %v,myTerm_%v,replyTerm_%v", rf.me, idx, rf.cureentTerm, reply.Term)
+						DPrintf("[%v]--AE_Response--:success append to %v,myTerm_%v,replyTerm_%v", rf.me, idx, rf.cureentTerm, reply.Term)
 					}
 					if reply.Term > rf.cureentTerm && rf.role != Follower {
-						DPrintf("--RoleChange--:%v change to Follower because --get AE_Response more Term from %v--", rf.me, idx)
+						DPrintf("[%v]--RoleChange--:change to Follower because --get AE_Response more Term from %v--", rf.me, idx)
 						rf.cureentTerm = reply.Term
 						rf.role = Follower
 					}
@@ -118,4 +108,5 @@ func (rf *Raft) doAppendEntry(aeType AppendEntriesType) {
 			}(i)
 		}
 	}
+	rf.mu.Lock()
 }

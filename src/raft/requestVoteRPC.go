@@ -32,23 +32,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("--RV_Request--:Candidate-%v try to get from %v,CandidateTerm-%v,myTerm-%v,hasVote-%v", args.CandidateId, rf.me, args.Term, rf.cureentTerm, rf.votedFor)
+	DPrintf("[%v]--RV_Request--:Candidate try to get from %v,CandidateTerm-%v,myTerm-%v,hasVote-%v", args.CandidateId, rf.me, args.Term, rf.cureentTerm, rf.votedFor)
 	//获得最后log
-	lastLog := rf.log.getLast()
-	var lastLogIndex, lastLogTerm int
-	if lastLog == nil {
-		lastLogIndex = 0
-		lastLogTerm = 0
-	} else {
-		lastLogIndex = lastLog.Index
-		lastLogTerm = lastLog.Term
-	}
+	lastLogTerm, lastLogIndex := rf.log.getLastTermAndIndexL()
 
 	//判断是否需要投票
 	if args.Term > rf.cureentTerm {
 		if rf.role != Follower {
 			rf.role = Follower
-			DPrintf("--RoleChange--:%v change to Follower because --get RV_RPC more Term from Candidate-%v--", rf.me, args.CandidateId)
+			DPrintf("[%v]--RoleChange--:change to Follower because --get RV_RPC more Term from Candidate-%v--", rf.me, args.CandidateId)
 		}
 		rf.cureentTerm = args.Term
 		rf.votedFor = -1
@@ -57,6 +49,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		(args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)) {
 		rf.cureentTerm = args.Term
 		rf.votedFor = args.CandidateId
+		rf.resetElectionTimeL()
 		reply.VoteGranted = true
 	} else {
 		reply.VoteGranted = false
@@ -101,29 +94,20 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 //其中有对rf的锁
 func (rf *Raft) doElection() {
 	rf.mu.Lock()
-
-	rf.role = Candidate
-	rf.cureentTerm++
-	rf.votedFor = rf.me
-
+	rf.initCandidateL()
 	//参数初始化
 	args := RequestVoteArgs{
 		Term:        rf.cureentTerm,
 		CandidateId: rf.me,
 	}
-	lastLog := rf.log.getLast()
-	if lastLog == nil {
-		args.LastLogIndex = 0
-		args.LastLogTerm = 0
-	} else {
-		args.LastLogIndex = lastLog.Index
-		args.LastLogTerm = lastLog.Term
-	}
+	args.LastLogTerm, args.LastLogIndex = rf.log.getLastTermAndIndexL()
 
 	//记录票数
 	voteCnt := 1
 	//记录完成数
 	finishCnt := 1
+	//标记完成别再输出
+	done := false
 	//condition通知多少选票
 	cond := sync.NewCond(&sync.Mutex{})
 
@@ -134,17 +118,23 @@ func (rf *Raft) doElection() {
 			go func(idx int) {
 				reply := RequestVoteReply{}
 				f := rf.sendRequestVote(idx, &args, &reply)
+
 				cond.L.Lock()
 				rf.mu.Lock()
+				if done {
+					rf.mu.Unlock()
+					cond.L.Unlock()
+					return
+				}
 				if f {
 					if reply.VoteGranted {
 						voteCnt++
-						DPrintf("--RV_Response--:%v getVote from %v", rf.me, idx)
+						DPrintf("[%v]--RV_Response--:getVote from %v", rf.me, idx)
 					} else {
-						DPrintf("--RV_Response--:%v rejectedVote from %v", rf.me, idx)
+						DPrintf("[%v]--RV_Response--:rejectedVote from %v", rf.me, idx)
 					}
 				} else {
-					DPrintf("--RV_Response--:%v can't receive response from %v", rf.me, idx)
+					DPrintf("[%v]--RV_Response--:RPC timeout,can't receive response from %v", rf.me, idx)
 				}
 				finishCnt++
 				rf.mu.Unlock()
@@ -156,31 +146,29 @@ func (rf *Raft) doElection() {
 	}
 
 	rf.mu.Lock()
-	DPrintf("--wait--:%v wait vote,vote-%v,finish-%v", rf.me, voteCnt, finishCnt)
+	DPrintf("[%v]--wait--:wait vote,vote-%v,finish-%v", rf.me, voteCnt, finishCnt)
 	rf.mu.Unlock()
 	//等待选票数够或者所有机器都完成了
 	cond.L.Lock()
 	for voteCnt < len(rf.peers)/2+1 && finishCnt < len(rf.peers) {
 		cond.Wait()
-		DPrintf("--wait--:%v wait vote,vote-%v,finish-%v", rf.me, voteCnt, finishCnt)
+		DPrintf("[%v]--wait--:wait vote,vote-%v,finish-%v", rf.me, voteCnt, finishCnt)
 	}
 	cond.L.Unlock()
 
 	rf.mu.Lock()
-	DPrintf("--wait--:%v wait vote,vote-%v,finish-%v", rf.me, voteCnt, finishCnt)
-	rf.mu.Unlock()
+	done = true
 	if voteCnt >= len(rf.peers)/2+1 {
-		rf.becomeLeader()
+		rf.becomeLeaderL()
 	} else {
-		rf.mu.Lock()
-		DPrintf("--RoleChange--:%v change to Follower because --Vote Failed", rf.me)
+		DPrintf("[%v]--RoleChange--:change to Follower because --Vote Failed", rf.me)
 		rf.role = Follower
-		rf.mu.Unlock()
 	}
+	rf.mu.Unlock()
 }
 
 //晋升leader,其中有对rf的锁
-func (rf *Raft) becomeLeader() {
-	rf.initLeader()
-	rf.doAppendEntry(NOOP)
+func (rf *Raft) becomeLeaderL() {
+	rf.initLeaderL()
+	rf.doAppendEntryL(NOOP)
 }

@@ -60,11 +60,14 @@ type Log struct {
 	Entries []Entry
 }
 
-func (l *Log) getLast() *Entry {
-	if len(l.Entries) == 0 {
-		return nil
-	}
+func (l *Log) getLastEntryL() *Entry {
 	return &l.Entries[len(l.Entries)-1]
+}
+
+func (l *Log) getLastTermAndIndexL() (int, int) {
+	entry := l.getLastEntryL()
+	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
+	return entry.Term, entry.Index
 }
 
 type Role int
@@ -111,36 +114,30 @@ type Raft struct {
 }
 
 //init all server
-func (rf *Raft) initServer() {
+func (rf *Raft) initServerUL() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	rf.cureentTerm = 0
 	rf.votedFor = -1
 	rf.log = Log{make([]Entry, 0)}
+	rf.log.Entries = append(rf.log.Entries, Entry{Term: 0, Index: 0})
 
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 
 	rf.role = Follower
 	rf.heartBeatTime = time.Duration(50) * time.Millisecond
-	rf.resetElectionTime()
-	DPrintf("--init--:server--%v--", rf.me)
+	rf.resetElectionTimeL()
+	DPrintf("[%v]--init--:Server--Term-%v", rf.me, rf.cureentTerm)
 }
 
 //init leader
-func (rf *Raft) initLeader() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
+func (rf *Raft) initLeaderL() {
 	rf.nextIndex = make([]int, len(rf.peers))
 	for i := 0; i < len(rf.nextIndex); i++ {
-		if len(rf.log.Entries) == 0 {
-			rf.nextIndex[i] = 1
-		} else {
-			rf.nextIndex[i] = rf.log.getLast().Index + 1
-		}
-
+		_, rf.nextIndex[i] = rf.log.getLastTermAndIndexL()
+		rf.nextIndex[i]++
 	}
 
 	rf.matchIndex = make([]int, len(rf.peers))
@@ -149,11 +146,20 @@ func (rf *Raft) initLeader() {
 	}
 
 	rf.role = Leader
-	DPrintf("--init--:leader--%v--Term-%v", rf.me, rf.cureentTerm)
+	DPrintf("[%v]--init--:Leader--Term-%v", rf.me, rf.cureentTerm)
 }
 
-func (rf *Raft) resetElectionTime() {
-	rf.electionTimeout = time.Now().Add(rf.heartBeatTime).Add(time.Duration(rand.Int()%200) * time.Millisecond)
+//init candidate
+func (rf *Raft) initCandidateL() {
+	rf.role = Candidate
+	rf.cureentTerm++
+	rf.votedFor = rf.me
+
+	DPrintf("[%v]--init--:Candidate--Term-%v", rf.me, rf.cureentTerm)
+}
+
+func (rf *Raft) resetElectionTimeL() {
+	rf.electionTimeout = time.Now().Add(rf.heartBeatTime * 2).Add(time.Duration(rand.Int()%200) * time.Millisecond)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -166,17 +172,14 @@ func (rf *Raft) ticker() {
 		// time.Sleep().
 		rf.mu.Lock()
 		if rf.role == Leader {
-			rf.resetElectionTime()
-			rf.mu.Unlock()
-			DPrintf("--doHeartBeat--:%v begin to send HeartBeat", rf.me)
-			rf.doAppendEntry(HeartBeat)
-			rf.mu.Lock()
+			rf.resetElectionTimeL()
+			DPrintf("[%v]--doHeartBeat--:begin to send HeartBeat", rf.me)
+			rf.doAppendEntryL(HeartBeat)
 		}
 		if time.Now().After(rf.electionTimeout) {
-			DPrintf("--doElection--:%v become candidate after electionTimeout--%v--", rf.me, rf.electionTimeout)
-			rf.resetElectionTime()
+			rf.resetElectionTimeL()
 			rf.mu.Unlock()
-			rf.doElection()
+			go rf.doElection()
 		} else {
 			rf.mu.Unlock()
 		}
@@ -319,7 +322,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	rf.initServer()
+	rf.initServerUL()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
