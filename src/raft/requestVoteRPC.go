@@ -92,7 +92,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 //其中有对rf的锁
-func (rf *Raft) doElection() {
+func (rf *Raft) doElectionUL() {
 	rf.mu.Lock()
 	rf.initCandidateL()
 	//参数初始化

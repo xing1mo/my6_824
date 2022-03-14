@@ -179,7 +179,7 @@ func (rf *Raft) ticker() {
 		if time.Now().After(rf.electionTimeout) {
 			rf.resetElectionTimeL()
 			rf.mu.Unlock()
-			go rf.doElection()
+			go rf.doElectionUL()
 		} else {
 			rf.mu.Unlock()
 		}
