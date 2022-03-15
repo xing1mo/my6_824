@@ -126,7 +126,7 @@ func (rf *Raft) doElectionUL() {
 					//通知结束选举
 					cond.Broadcast()
 				}
-				if done {
+				if done || rf.killed() {
 					rf.mu.Unlock()
 					cond.L.Unlock()
 					return
@@ -158,7 +158,7 @@ func (rf *Raft) doElectionUL() {
 	cond.L.Lock()
 	for voteCnt < len(rf.peers)/2+1 && finishCnt < len(rf.peers) {
 		cond.Wait()
-		if done {
+		if done || rf.killed() {
 			return
 		}
 		DPrintf("[%v]--wait--:wait vote,vote-%v,finish-%v", rf.me, voteCnt, finishCnt)

@@ -273,11 +273,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-
 	// Your code here (2B).
+	index := len(rf.log.Entries)
+	term := rf.cureentTerm
+	isLeader := rf.role == Leader
 
 	return index, term, isLeader
 }

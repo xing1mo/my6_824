@@ -91,6 +91,9 @@ func (rf *Raft) doAppendEntryL(aeType AppendEntriesType) {
 			go func(idx int) {
 				reply := AppendEntriesReply{}
 				if rf.sendAppendEntries(idx, &args, &reply) {
+					if rf.killed() {
+						return
+					}
 					rf.mu.Lock()
 					if reply.Success == false {
 						//
