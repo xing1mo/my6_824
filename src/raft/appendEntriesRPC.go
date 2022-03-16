@@ -137,34 +137,45 @@ func (rf *Raft) tryReplicationUL(peer int) {
 				}
 
 			}
-		} else if len(args.Entries) == 0 {
-			DPrintf("[%v]--AE_Response--Ignore-:success append to [%v]", rf.me, peer)
 		} else {
-			rf.matchIndex[peer] = args.Entries[len(args.Entries)-1].Index
-			rf.nextIndex[peer] = rf.matchIndex[peer] + 1
-			//DPrintf("[%v]--AE_Response--UpdateMatch-%v--:success append to [%v],myTerm_%v,replyTerm_%v", rf.me, rf.matchIndex[peer], peer, rf.cureentTerm, reply.Term)
-
-			//更新commit
-			var tmp = make([]int, len(rf.peers))
-			copy(tmp, rf.matchIndex)
-			tmp[rf.me] = rf.log.getLen()
-			sort.Ints(tmp)
-			nxtCommitMax := tmp[len(rf.peers)/2]
-			if nxtCommitMax < rf.commitIndex {
-				DPrintf("[%v]--AE_True--UpdateCommit--Error--:commitIndex-%v,nxtCommitMax-%v,matchIndex-%v", rf.me, rf.commitIndex, nxtCommitMax, rf.matchIndex)
-			} else if rf.log.Entries[nxtCommitMax].Term == rf.cureentTerm {
-				//更新commmit
-				if rf.commitIndex == nxtCommitMax {
-					DPrintf("[%v]--AE_True--UpdateCommit--Same:commitIndex-%v,nxtCommitMax-%v", rf.me, rf.commitIndex, nxtCommitMax)
-				} else {
-					DPrintf("[%v]--AE_True--UpdateCommit--Success:commitIndex-%v,nxtCommitMax-%v", rf.me, rf.commitIndex, nxtCommitMax)
-					rf.commitIndex = nxtCommitMax
-				}
+			//更新matchIndex
+			var nxtMatchIndex int
+			if len(args.Entries) == 0 {
+				nxtMatchIndex = args.PrevLogIndex
 			} else {
-				DPrintf("[%v]--AE_True--UpdateCommit--TermLittle--:commitIndex-%v,nxtCommitMax-%v,nxtCommitTerm-%v,cureentTerm-%v", rf.me, rf.commitIndex, nxtCommitMax, rf.log.Entries[nxtCommitMax].Term, rf.cureentTerm)
+				nxtMatchIndex = args.Entries[len(args.Entries)-1].Index
+			}
+
+			if nxtMatchIndex == rf.matchIndex[peer] {
+				DPrintf("[%v]--AE_Response--Ignore-:success append to [%v]", rf.me, peer)
+			} else {
+				rf.matchIndex[peer] = nxtMatchIndex
+				rf.nextIndex[peer] = rf.matchIndex[peer] + 1
+				//DPrintf("[%v]--AE_Response--UpdateMatch-%v--:success append to [%v],myTerm_%v,replyTerm_%v", rf.me, rf.matchIndex[peer], peer, rf.cureentTerm, reply.Term)
+
+				//更新commit
+				var tmp = make([]int, len(rf.peers))
+				copy(tmp, rf.matchIndex)
+				tmp[rf.me] = rf.log.getLen()
+				sort.Ints(tmp)
+				nxtCommitMax := tmp[len(rf.peers)/2]
+				if rf.log.Entries[nxtCommitMax].Term == rf.cureentTerm && nxtCommitMax >= rf.commitIndex {
+					//更新commmit
+					if rf.commitIndex == nxtCommitMax {
+						DPrintf("[%v]--AE_True--UpdateCommit--Same:commitIndex-%v,nxtCommitMax-%v", rf.me, rf.commitIndex, nxtCommitMax)
+					} else {
+						DPrintf("[%v]--AE_True--UpdateCommit--Success:commitIndex-%v,nxtCommitMax-%v", rf.me, rf.commitIndex, nxtCommitMax)
+						rf.commitIndex = nxtCommitMax
+					}
+				} else {
+					if nxtCommitMax < rf.commitIndex {
+						DPrintf("[%v]--AE_True--UpdateCommit--CommitLittle--:commitIndex-%v,nxtCommitMax-%v,matchIndex-%v", rf.me, rf.commitIndex, nxtCommitMax, rf.matchIndex)
+					} else {
+						DPrintf("[%v]--AE_True--UpdateCommit--TermLittle--:commitIndex-%v,nxtCommitMax-%v,nxtCommitTerm-%v,cureentTerm-%v", rf.me, rf.commitIndex, nxtCommitMax, rf.log.Entries[nxtCommitMax].Term, rf.cureentTerm)
+					}
+				}
 			}
 		}
-
 	}
 	rf.mu.Unlock()
 }
