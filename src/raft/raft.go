@@ -69,6 +69,39 @@ func (l *Log) getLastTermAndIndexL() (int, int) {
 	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
 	return entry.Term, entry.Index
 }
+func (l *Log) getLastTermL() int {
+	entry := l.getLastEntryL()
+	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
+	return entry.Term
+}
+func (l *Log) getLastIndexL() int {
+	entry := l.getLastEntryL()
+	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
+	return entry.Index
+}
+
+func (l *Log) getIndexTermAndIndexL(index int) (int, int) {
+	entry := l.Entries[index]
+	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
+	return entry.Term, entry.Index
+}
+func (l *Log) getIndexTermL(index int) int {
+	entry := l.Entries[index]
+	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
+	return entry.Term
+}
+func (l *Log) getIndexIndexL(index int) int {
+	entry := l.Entries[index]
+	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
+	return entry.Index
+}
+func (l *Log) getLen() int {
+	return len(l.Entries)
+}
+
+func (l *Log) appendEntry(entry Entry) {
+	l.Entries = append(l.Entries, entry)
+}
 
 type Role int
 
@@ -99,6 +132,11 @@ type Raft struct {
 	//心跳时间
 	heartBeatTime time.Duration
 
+	//向应用回复已经commit的log
+	applyCh chan ApplyMsg
+	//处理新增加Entry,防止一次流量过大造成重复的Entry发送浪费资源
+	replicationCond []*sync.Cond
+
 	//Persistent state on all servers:
 	cureentTerm int //init 1
 	votedFor    int //init -1,表示没投票
@@ -128,7 +166,20 @@ func (rf *Raft) initServerUL() {
 
 	rf.role = Follower
 	rf.heartBeatTime = time.Duration(50) * time.Millisecond
+
+	//为每个节点启一个线程处理replication
+	rf.replicationCond = make([]*sync.Cond, len(rf.peers))
+	for i := 0; i < len(rf.peers); i++ {
+		rf.replicationCond[i] = sync.NewCond(&sync.Mutex{})
+		if i != rf.me {
+			go rf.replicationQueue(i)
+		}
+	}
+	//处理Entry应用到状态机
+	go rf.commitToRSM()
+
 	rf.resetElectionTimeL()
+
 	DPrintf("[%v]--init--:Server--Term-%v", rf.me, rf.cureentTerm)
 }
 
@@ -173,8 +224,10 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		if rf.role == Leader {
 			rf.resetElectionTimeL()
-			DPrintf("[%v]--doHeartBeat--:begin to send HeartBeat", rf.me)
-			rf.doAppendEntryL(HeartBeat)
+			DPrintf("[%v]--doHeartBeat--:begin to send HeartBeat-%v", rf.me, rf.cureentTerm)
+			rf.mu.Unlock()
+			rf.doAppendEntryUL(HeartBeat)
+			rf.mu.Lock()
 		}
 		if time.Now().After(rf.electionTimeout) {
 			rf.resetElectionTimeL()
@@ -274,10 +327,22 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
+	rf.mu.Lock()
 	index := len(rf.log.Entries)
 	term := rf.cureentTerm
 	isLeader := rf.role == Leader
-
+	if isLeader {
+		DPrintf("[%v]--AcceptCommand--:new entry at Index-%v Term-%v", rf.me, index, term)
+		rf.log.appendEntry(Entry{
+			Term:    term,
+			Index:   index,
+			Command: command,
+		})
+		rf.mu.Unlock()
+		rf.doAppendEntryUL(Replication)
+	} else {
+		rf.mu.Unlock()
+	}
 	return index, term, isLeader
 }
 
@@ -319,6 +384,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyCh = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.initServerUL()
