@@ -165,13 +165,13 @@ func (rf *Raft) initServerUL() {
 	rf.lastApplied = 0
 
 	rf.role = Follower
-	rf.heartBeatTime = time.Duration(50) * time.Millisecond
+	rf.heartBeatTime = time.Duration(50)
 
 	//为每个节点启一个线程处理replication
 	rf.replicationCond = make([]*sync.Cond, len(rf.peers))
 	for i := 0; i < len(rf.peers); i++ {
-		rf.replicationCond[i] = sync.NewCond(&sync.Mutex{})
 		if i != rf.me {
+			rf.replicationCond[i] = sync.NewCond(&sync.Mutex{})
 			go rf.replicationQueue(i)
 		}
 	}
@@ -210,18 +210,20 @@ func (rf *Raft) initCandidateL() {
 }
 
 func (rf *Raft) resetElectionTimeL() {
-	rf.electionTimeout = time.Now().Add(time.Duration(rand.Int()%200+100) * time.Millisecond)
-	DPrintf("[%v]--resetElectionTimeL--:from-%v,to-%v", rf.me, time.Now(), rf.electionTimeout)
+	tmp := rand.Int()%200 + 150
+	rf.electionTimeout = time.Now().Add(time.Duration(tmp) * time.Millisecond)
+	DPrintf("[%v]--resetElectionTimeL--:add-%v", rf.me, tmp)
 }
 
+//超时选举
 func (rf *Raft) election() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if time.Now().After(rf.electionTimeout) {
 			DPrintf("[%v]--timeout--:Now-%v,electionTimeout%v", rf.me, time.Now(), rf.electionTimeout)
 			rf.resetElectionTimeL()
-			rf.mu.Unlock()
-			go rf.doElectionUL()
+			rf.initCandidateL()
+			go rf.doElectionUL(rf.initElectionArgsL())
 		} else {
 			rf.mu.Unlock()
 		}
@@ -232,7 +234,6 @@ func (rf *Raft) election() {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
-	go rf.election()
 	for rf.killed() == false {
 
 		// Your code here to check if a leader election should
@@ -247,7 +248,7 @@ func (rf *Raft) ticker() {
 		} else {
 			rf.mu.Unlock()
 		}
-		time.Sleep(rf.heartBeatTime)
+		time.Sleep(rf.heartBeatTime * time.Millisecond)
 	}
 }
 
@@ -405,6 +406,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
+	go rf.election()
 	return rf
 }

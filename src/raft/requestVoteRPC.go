@@ -45,7 +45,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.cureentTerm = args.Term
 		rf.votedFor = -1
 	}
-	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
+	if args.Term >= rf.cureentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
 		(args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)) {
 		rf.cureentTerm = args.Term
 		rf.votedFor = args.CandidateId
@@ -91,16 +91,20 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-//其中有对rf的锁
-func (rf *Raft) doElectionUL() {
-	rf.mu.Lock()
-	rf.initCandidateL()
+func (rf *Raft) initElectionArgsL() *RequestVoteArgs {
 	//参数初始化
 	args := RequestVoteArgs{
 		Term:        rf.cureentTerm,
 		CandidateId: rf.me,
 	}
 	args.LastLogTerm, args.LastLogIndex = rf.log.getLastTermAndIndexL()
+	rf.mu.Unlock()
+	return &args
+}
+
+//其中有对rf的锁
+func (rf *Raft) doElectionUL(args *RequestVoteArgs) {
+	rf.mu.Lock()
 
 	//记录票数
 	voteCnt := 1
@@ -117,7 +121,7 @@ func (rf *Raft) doElectionUL() {
 		if i != rf.me {
 			go func(idx int) {
 				reply := RequestVoteReply{}
-				f := rf.sendRequestVote(idx, &args, &reply)
+				f := rf.sendRequestVote(idx, args, &reply)
 
 				cond.L.Lock()
 				rf.mu.Lock()

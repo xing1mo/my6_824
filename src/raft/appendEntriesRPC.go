@@ -86,7 +86,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				DPrintf("[%v]--AE_Request--UpdateCommit--Success--:commitIndex-%v,nxtCommitMax-%v", rf.me, rf.commitIndex, nxtCommitMax)
 				rf.commitIndex = nxtCommitMax
 			} else {
-				DPrintf("[%v]--AE_Request--UpdateCommit--No--:commitIndex-%v,LeaderCommit-%v", rf.me, rf.commitIndex, args.LeaderCommit)
+				//DPrintf("[%v]--AE_Request--UpdateCommit--No--:commitIndex-%v,LeaderCommit-%v", rf.me, rf.commitIndex, args.LeaderCommit)
 			}
 			reply.Success = true
 		}
