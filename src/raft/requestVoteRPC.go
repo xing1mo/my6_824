@@ -142,6 +142,11 @@ func (rf *Raft) doElectionUL(args *RequestVoteArgs) {
 						//DPrintf("[%v]--RV_Response--:getVote from [%v]", rf.me, idx)
 					} else {
 						//DPrintf("[%v]--RV_Response--:rejectedVote from [%v]", rf.me, idx)
+						if reply.Term > rf.cureentTerm && rf.role != Follower {
+							DPrintf("[%v]--RoleChange--:get RV_Response more Term from [%v]--,myTerm_%v,replyTerm_%v", rf.me, idx, rf.cureentTerm, reply.Term)
+							rf.cureentTerm = reply.Term
+							rf.role = Follower
+						}
 					}
 				} else {
 					//DPrintf("[%v]--RV_Response--:RPC timeout,can't receive response from [%v]", rf.me, idx)

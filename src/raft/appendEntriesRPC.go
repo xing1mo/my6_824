@@ -101,11 +101,13 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 //向peer复制日志
 func (rf *Raft) tryReplicationUL(peer int) {
+	DPrintf("[%v]--begin1 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 	rf.mu.Lock()
 	if rf.role != Leader {
 		rf.mu.Unlock()
 		return
 	}
+	DPrintf("[%v]--begin2 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 	//初始化args
 	args := AppendEntriesArgs{
 		Term:         rf.cureentTerm,
@@ -122,10 +124,13 @@ func (rf *Raft) tryReplicationUL(peer int) {
 	reply := AppendEntriesReply{}
 	rf.mu.Unlock()
 
+	DPrintf("[%v]--begin3 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 	//向server发送
 	f := rf.sendAppendEntries(peer, &args, &reply)
+	DPrintf("[%v]--begin4 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 	rf.mu.Lock()
 	if f && rf.role == Leader && rf.cureentTerm == args.Term {
+		DPrintf("[%v]--begin5 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 		if reply.Success == false {
 			if reply.Term <= args.Term {
 				//更新nextIndex寻找最大共识
@@ -182,6 +187,7 @@ func (rf *Raft) tryReplicationUL(peer int) {
 			}
 		}
 	}
+	DPrintf("[%v]--begin6 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 	rf.mu.Unlock()
 }
 
@@ -197,14 +203,14 @@ func (rf *Raft) needReplicationUL(peer int) bool {
 
 //按顺序处理新增加Entry,防止一次流量过大造成重复的Entry发送浪费资源
 func (rf *Raft) replicationQueue(peer int) {
+	rf.replicationCond[peer].L.Lock()
 	for !rf.killed() {
-		rf.replicationCond[peer].L.Lock()
 		for !rf.needReplicationUL(peer) {
 			rf.replicationCond[peer].Wait()
 		}
-		rf.replicationCond[peer].L.Unlock()
 		rf.tryReplicationUL(peer)
 	}
+	rf.replicationCond[peer].L.Unlock()
 }
 
 //进行心跳发送或者激活Replication
