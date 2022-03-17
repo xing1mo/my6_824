@@ -32,7 +32,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	//DPrintf("[%v]--RV_Request--:Candidate try to get from %v,CandidateTerm-%v,myTerm-%v,hasVote-%v", args.CandidateId, rf.me, args.Term, rf.cureentTerm, rf.votedFor)
+	//DPrintf("[%v]--RV_Request--:try to get from [%v],CandidateTerm-%v,myTerm-%v,hasVote-%v", args.CandidateId, rf.me, args.Term, rf.cureentTerm, rf.votedFor)
 	//获得最后log
 	lastLogTerm, lastLogIndex := rf.log.getLastTermAndIndexL()
 
@@ -40,7 +40,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term > rf.cureentTerm {
 		if rf.role != Follower {
 			rf.role = Follower
-			DPrintf("[%v]--RoleChange--:get RV_RPC more Term from Candidate-%v--", rf.me, args.CandidateId)
+			DPrintf("[%v]--RoleChange--:get RV_RPC more Term from Candidate-[%v]--", rf.me, args.CandidateId)
 		}
 		rf.cureentTerm = args.Term
 		rf.votedFor = -1
@@ -135,17 +135,16 @@ func (rf *Raft) doElectionUL() {
 				if f {
 					if reply.VoteGranted {
 						voteCnt++
-						//DPrintf("[%v]--RV_Response--:getVote from %v", rf.me, idx)
+						//DPrintf("[%v]--RV_Response--:getVote from [%v]", rf.me, idx)
 					} else {
-						//DPrintf("[%v]--RV_Response--:rejectedVote from %v", rf.me, idx)
+						//DPrintf("[%v]--RV_Response--:rejectedVote from [%v]", rf.me, idx)
 					}
 				} else {
-					//DPrintf("[%v]--RV_Response--:RPC timeout,can't receive response from %v", rf.me, idx)
+					//DPrintf("[%v]--RV_Response--:RPC timeout,can't receive response from [%v]", rf.me, idx)
 				}
 				finishCnt++
 				rf.mu.Unlock()
 				cond.L.Unlock()
-				//DPrintf("--finish--:%v finish vote", rf.me)
 				cond.Broadcast()
 			}(i)
 		}

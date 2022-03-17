@@ -85,9 +85,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				nxtCommitMax := Min(args.LeaderCommit, rf.log.getLastIndexL())
 				DPrintf("[%v]--AE_Request--UpdateCommit--Success--:commitIndex-%v,nxtCommitMax-%v", rf.me, rf.commitIndex, nxtCommitMax)
 				rf.commitIndex = nxtCommitMax
+			} else {
+				DPrintf("[%v]--AE_Request--UpdateCommit--No--:commitIndex-%v,LeaderCommit-%v", rf.me, rf.commitIndex, args.LeaderCommit)
 			}
 			reply.Success = true
 		}
+		rf.resetElectionTimeL()
 	}
 }
 
@@ -126,7 +129,9 @@ func (rf *Raft) tryReplicationUL(peer int) {
 		if reply.Success == false {
 			if reply.Term <= args.Term {
 				//更新nextIndex寻找最大共识
-				rf.nextIndex[peer]--
+				if args.PrevLogIndex == rf.log.getIndexIndexL(rf.nextIndex[peer]-1) {
+					rf.nextIndex[peer]--
+				}
 				DPrintf("[%v]--AE_False--ReduceNext-%v--:fail append to [%v],myTerm_%v,replyTerm_%v", rf.me, rf.nextIndex[peer], peer, args.Term, reply.Term)
 			} else {
 				DPrintf("[%v]--AE_False--TermLittle--:fail append to [%v],myTerm_%v,replyTerm_%v", rf.me, peer, args.Term, reply.Term)

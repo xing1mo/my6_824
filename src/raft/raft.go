@@ -210,12 +210,29 @@ func (rf *Raft) initCandidateL() {
 }
 
 func (rf *Raft) resetElectionTimeL() {
-	rf.electionTimeout = time.Now().Add(rf.heartBeatTime * 2).Add(time.Duration(rand.Int()%200) * time.Millisecond)
+	rf.electionTimeout = time.Now().Add(time.Duration(rand.Int()%200+100) * time.Millisecond)
+	DPrintf("[%v]--resetElectionTimeL--:from-%v,to-%v", rf.me, time.Now(), rf.electionTimeout)
+}
+
+func (rf *Raft) election() {
+	for rf.killed() == false {
+		rf.mu.Lock()
+		if time.Now().After(rf.electionTimeout) {
+			DPrintf("[%v]--timeout--:Now-%v,electionTimeout%v", rf.me, time.Now(), rf.electionTimeout)
+			rf.resetElectionTimeL()
+			rf.mu.Unlock()
+			go rf.doElectionUL()
+		} else {
+			rf.mu.Unlock()
+		}
+		time.Sleep(time.Duration(2) * time.Millisecond)
+	}
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
+	go rf.election()
 	for rf.killed() == false {
 
 		// Your code here to check if a leader election should
@@ -227,12 +244,6 @@ func (rf *Raft) ticker() {
 			DPrintf("[%v]--doHeartBeat--:begin to send HeartBeat-%v", rf.me, rf.cureentTerm)
 			rf.mu.Unlock()
 			rf.doAppendEntryUL(HeartBeat)
-			rf.mu.Lock()
-		}
-		if time.Now().After(rf.electionTimeout) {
-			rf.resetElectionTimeL()
-			rf.mu.Unlock()
-			go rf.doElectionUL()
 		} else {
 			rf.mu.Unlock()
 		}
