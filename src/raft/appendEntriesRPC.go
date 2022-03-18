@@ -243,8 +243,9 @@ func (rf *Raft) commitToRSM() {
 				Command:      rf.log.Entries[rf.lastApplied].Command,
 				CommandIndex: rf.lastApplied,
 			}
-
+			rf.mu.Lock()
 			DPrintf("[%v]--CommitCommand--:index-%v,term-%v", rf.me, rf.lastApplied, rf.log.getIndexTermL(rf.lastApplied))
+			rf.mu.Unlock()
 			time.Sleep(20 * time.Millisecond)
 		} else {
 			rf.mu.Unlock()
