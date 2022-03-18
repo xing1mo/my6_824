@@ -210,7 +210,7 @@ func (rf *Raft) initCandidateL() {
 }
 
 func (rf *Raft) resetElectionTimeL() {
-	tmp := rand.Int()%200 + 150
+	tmp := rand.Int()%150 + 150
 	rf.electionTimeout = time.Now().Add(time.Duration(tmp) * time.Millisecond)
 	DPrintf("[%v]--resetElectionTimeL--:add-%v,electionTimeout-%v", rf.me, tmp, rf.electionTimeout)
 }

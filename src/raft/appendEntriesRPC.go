@@ -240,21 +240,23 @@ func (rf *Raft) commitToRSM() {
 	for !rf.killed() {
 		rf.mu.Lock()
 		if rf.lastApplied < rf.commitIndex {
-			rf.lastApplied++
-			applyMsg := ApplyMsg{
-				CommandValid: true,
-				Command:      rf.log.Entries[rf.lastApplied].Command,
-				CommandIndex: rf.lastApplied,
+			for rf.lastApplied < rf.commitIndex {
+				rf.lastApplied++
+				applyMsg := ApplyMsg{
+					CommandValid: true,
+					Command:      rf.log.Entries[rf.lastApplied].Command,
+					CommandIndex: rf.lastApplied,
+				}
+				rf.mu.Unlock()
+
+				rf.applyCh <- applyMsg
+				rf.mu.Lock()
+				DPrintf("[%v]--CommitCommand--:index-%v,term-%v", rf.me, rf.lastApplied, rf.log.getIndexTermL(rf.lastApplied))
 			}
 			rf.mu.Unlock()
-
-			rf.applyCh <- applyMsg
-			rf.mu.Lock()
-			DPrintf("[%v]--CommitCommand--:index-%v,term-%v", rf.me, rf.lastApplied, rf.log.getIndexTermL(rf.lastApplied))
-			rf.mu.Unlock()
-			time.Sleep(20 * time.Millisecond)
 		} else {
 			rf.mu.Unlock()
 		}
+		time.Sleep(1 * time.Millisecond)
 	}
 }
