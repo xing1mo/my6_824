@@ -165,7 +165,7 @@ func (rf *Raft) initServerUL() {
 	rf.lastApplied = 0
 
 	rf.role = Follower
-	rf.heartBeatTime = time.Duration(50)
+	rf.heartBeatTime = time.Duration(100)
 
 	//为每个节点启一个线程处理replication
 	rf.replicationCond = make([]*sync.Cond, len(rf.peers))
@@ -210,7 +210,7 @@ func (rf *Raft) initCandidateL() {
 }
 
 func (rf *Raft) resetElectionTimeL() {
-	tmp := rand.Int()%200 + 150
+	tmp := rand.Int()%150 + 250
 	rf.electionTimeout = time.Now().Add(time.Duration(tmp) * time.Millisecond)
 	DPrintf("[%v]--resetElectionTimeL--:add-%v,electionTimeout-%v", rf.me, tmp, rf.electionTimeout)
 }
