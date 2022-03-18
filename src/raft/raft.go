@@ -99,7 +99,7 @@ func (l *Log) getLen() int {
 	return len(l.Entries)
 }
 
-func (l *Log) appendEntry(entry Entry) {
+func (l *Log) appendEntryL(entry Entry) {
 	l.Entries = append(l.Entries, entry)
 }
 
@@ -346,7 +346,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := rf.role == Leader
 	if isLeader {
 		DPrintf("[%v]--AcceptCommand--:new entry at Index-%v Term-%v", rf.me, index, term)
-		rf.log.appendEntry(Entry{
+		rf.log.appendEntryL(Entry{
 			Term:    term,
 			Index:   index,
 			Command: command,

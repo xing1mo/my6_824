@@ -222,9 +222,13 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	// 3 of 5 followers disconnect
 	leader := cfg.checkOneLeader()
+	DPrintf("disconnect-0-%v", leader)
 	cfg.disconnect((leader + 1) % servers)
+	DPrintf("disconnect-1-%v", (leader+1)%servers)
 	cfg.disconnect((leader + 2) % servers)
+	DPrintf("disconnect-2-%v", (leader+2)%servers)
 	cfg.disconnect((leader + 3) % servers)
+	DPrintf("disconnect-3-%v", (leader+3)%servers)
 
 	index, _, ok := cfg.rafts[leader].Start(20)
 	if ok != true {
