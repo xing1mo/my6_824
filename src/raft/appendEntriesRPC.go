@@ -24,8 +24,9 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
+	Term      int
+	Success   bool
+	NextIndex int
 }
 
 //处理收到的RPC
@@ -34,6 +35,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 
 	reply.Term = rf.cureentTerm
+	reply.NextIndex = 0
 	if args.Term < rf.cureentTerm {
 		//Reply false if term < currentTerm
 		DPrintf("[%v]--AE_Request--LeaderTermLittle--:To [%v],myTerm-%v,LeaderTerm-%v", args.LeaderId, rf.me, rf.cureentTerm, args.Term)
@@ -51,8 +53,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			//Reply false if log doesn’t contain an entry at prevLogIndex
 			//whose term matches prevLogTerm
 			if rf.log.getLastIndexL() < args.PrevLogIndex {
+				reply.NextIndex = rf.log.getLastIndexL() + 1
 				DPrintf("[%v]--AE_Request--conflict--LackEntry--:To [%v],myTerm-%v,LeaderTerm-%v,LastIndex-%v,PrevLogIndex-%v", args.LeaderId, rf.me, rf.cureentTerm, args.Term, rf.log.getLastIndexL(), args.PrevLogIndex)
 			} else {
+				reply.NextIndex = args.PrevLogIndex
+				for reply.NextIndex-1 >= 1 && rf.log.getIndexTermL(reply.NextIndex-1) == rf.log.Entries[args.PrevLogIndex].Term {
+					reply.NextIndex--
+				}
 				DPrintf("[%v]--AE_Request--conflict--ConflictEntry--:To [%v],myTerm-%v,LeaderTerm-%v,Index-%v,myLogTerm-%v,PrevLogTerm-%v", args.LeaderId, rf.me, rf.cureentTerm, args.Term, args.PrevLogIndex, rf.log.Entries[args.PrevLogIndex].Term, args.PrevLogTerm)
 			}
 
@@ -135,9 +142,7 @@ func (rf *Raft) tryReplicationUL(peer int) {
 		if reply.Success == false {
 			if reply.Term <= args.Term {
 				//更新nextIndex寻找最大共识
-				if args.PrevLogIndex == rf.log.getIndexIndexL(rf.nextIndex[peer]-1) {
-					rf.nextIndex[peer]--
-				}
+				rf.nextIndex[peer] = reply.NextIndex
 				DPrintf("[%v]--AE_False--ReduceNext-%v--:fail append to [%v],myTerm_%v,replyTerm_%v", rf.me, rf.nextIndex[peer], peer, args.Term, reply.Term)
 			} else {
 				DPrintf("[%v]--AE_False--TermLittle--:fail append to [%v],myTerm_%v,replyTerm_%v", rf.me, peer, args.Term, reply.Term)
@@ -235,21 +240,23 @@ func (rf *Raft) commitToRSM() {
 	for !rf.killed() {
 		rf.mu.Lock()
 		if rf.lastApplied < rf.commitIndex {
-			rf.lastApplied++
-			applyMsg := ApplyMsg{
-				CommandValid: true,
-				Command:      rf.log.Entries[rf.lastApplied].Command,
-				CommandIndex: rf.lastApplied,
+			for rf.lastApplied < rf.commitIndex {
+				rf.lastApplied++
+				applyMsg := ApplyMsg{
+					CommandValid: true,
+					Command:      rf.log.Entries[rf.lastApplied].Command,
+					CommandIndex: rf.lastApplied,
+				}
+				rf.mu.Unlock()
+
+				rf.applyCh <- applyMsg
+				rf.mu.Lock()
+				DPrintf("[%v]--CommitCommand--:index-%v,term-%v", rf.me, rf.lastApplied, rf.log.getIndexTermL(rf.lastApplied))
 			}
 			rf.mu.Unlock()
-
-			rf.applyCh <- applyMsg
-			rf.mu.Lock()
-			DPrintf("[%v]--CommitCommand--:index-%v,term-%v", rf.me, rf.lastApplied, rf.log.getIndexTermL(rf.lastApplied))
-			rf.mu.Unlock()
-			time.Sleep(20 * time.Millisecond)
 		} else {
 			rf.mu.Unlock()
 		}
+		time.Sleep(1 * time.Millisecond)
 	}
 }
