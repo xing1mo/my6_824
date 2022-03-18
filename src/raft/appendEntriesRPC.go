@@ -101,7 +101,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 //向peer复制日志
 func (rf *Raft) tryReplicationUL(peer int) {
-	DPrintf("[%v]--begin1 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+	DPrintf("[%v]--begin1 to [%v]--", rf.me, peer)
 	rf.mu.Lock()
 	if rf.role != Leader {
 		rf.mu.Unlock()
@@ -122,15 +122,16 @@ func (rf *Raft) tryReplicationUL(peer int) {
 	args.PrevLogTerm, args.PrevLogIndex = rf.log.getIndexTermAndIndexL(rf.nextIndex[peer] - 1)
 
 	reply := AppendEntriesReply{}
+	DPrintf("[%v]--begin3 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 	rf.mu.Unlock()
 
-	DPrintf("[%v]--begin3 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+	DPrintf("[%v]--begin4 to [%v]--", rf.me, peer)
 	//向server发送
 	f := rf.sendAppendEntries(peer, &args, &reply)
-	DPrintf("[%v]--begin4 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+	DPrintf("[%v]--begin5 to [%v]--", rf.me, peer)
 	rf.mu.Lock()
 	if f && rf.role == Leader && rf.cureentTerm == args.Term {
-		DPrintf("[%v]--begin5 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+		DPrintf("[%v]--begin6 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 		if reply.Success == false {
 			if reply.Term <= args.Term {
 				//更新nextIndex寻找最大共识
@@ -187,7 +188,7 @@ func (rf *Raft) tryReplicationUL(peer int) {
 			}
 		}
 	}
-	DPrintf("[%v]--begin6 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+	DPrintf("[%v]--begin7 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
 	rf.mu.Unlock()
 }
 

@@ -212,7 +212,7 @@ func (rf *Raft) initCandidateL() {
 func (rf *Raft) resetElectionTimeL() {
 	tmp := rand.Int()%200 + 150
 	rf.electionTimeout = time.Now().Add(time.Duration(tmp) * time.Millisecond)
-	DPrintf("[%v]--resetElectionTimeL--:add-%v", rf.me, tmp)
+	DPrintf("[%v]--resetElectionTimeL--:add-%v,electionTimeout-%v", rf.me, tmp, rf.electionTimeout)
 }
 
 //超时选举
@@ -223,7 +223,8 @@ func (rf *Raft) election() {
 			DPrintf("[%v]--timeout--:Now-%v,electionTimeout%v", rf.me, time.Now(), rf.electionTimeout)
 			rf.resetElectionTimeL()
 			rf.initCandidateL()
-			go rf.doElectionUL(rf.initElectionArgsL())
+			arg := rf.initElectionArgsL()
+			go rf.doElectionUL(arg)
 		} else {
 			rf.mu.Unlock()
 		}
@@ -231,7 +232,7 @@ func (rf *Raft) election() {
 	}
 }
 
-// The ticker go routine starts a new election if this peer hasn't received
+// The ticker go routine starts a new election if this peser hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
