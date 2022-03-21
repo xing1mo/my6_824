@@ -51,58 +51,6 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
-type Entry struct {
-	Command interface{}
-	Term    int
-	Index   int
-}
-type Log struct {
-	Entries []Entry
-}
-
-func (l *Log) getLastEntryL() *Entry {
-	return &l.Entries[len(l.Entries)-1]
-}
-
-func (l *Log) getLastTermAndIndexL() (int, int) {
-	entry := l.getLastEntryL()
-	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
-	return entry.Term, entry.Index
-}
-func (l *Log) getLastTermL() int {
-	entry := l.getLastEntryL()
-	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
-	return entry.Term
-}
-func (l *Log) getLastIndexL() int {
-	entry := l.getLastEntryL()
-	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
-	return entry.Index
-}
-
-func (l *Log) getIndexTermAndIndexL(index int) (int, int) {
-	entry := l.Entries[index]
-	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
-	return entry.Term, entry.Index
-}
-func (l *Log) getIndexTermL(index int) int {
-	entry := l.Entries[index]
-	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
-	return entry.Term
-}
-func (l *Log) getIndexIndexL(index int) int {
-	entry := l.Entries[index]
-	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
-	return entry.Index
-}
-func (l *Log) getLen() int {
-	return len(l.Entries)
-}
-
-func (l *Log) appendEntryL(entry Entry) {
-	l.Entries = append(l.Entries, entry)
-}
-
 type Role int
 
 const (
@@ -212,7 +160,7 @@ func (rf *Raft) initCandidateL() {
 func (rf *Raft) resetElectionTimeL() {
 	tmp := rand.Int()%150 + 150
 	rf.electionTimeout = time.Now().Add(time.Duration(tmp) * time.Millisecond)
-	DPrintf("[%v]--resetElectionTimeL--:add-%v,electionTimeout-%v", rf.me, tmp, rf.electionTimeout)
+	//DPrintf("[%v]--resetElectionTimeL--:add-%v,electionTimeout-%v", rf.me, tmp, rf.electionTimeout)
 }
 
 //超时选举
@@ -220,7 +168,7 @@ func (rf *Raft) election() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 		if time.Now().After(rf.electionTimeout) {
-			DPrintf("[%v]--timeout--:Now-%v,electionTimeout%v", rf.me, time.Now(), rf.electionTimeout)
+			//DPrintf("[%v]--timeout--:Now-%v,electionTimeout%v", rf.me, time.Now(), rf.electionTimeout)
 			rf.resetElectionTimeL()
 			rf.initCandidateL()
 			arg := rf.initElectionArgsL()

@@ -46,7 +46,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.role = Follower
 		}
 		rf.cureentTerm = args.Term
-		rf.resetElectionTimeL()
+		//rf.resetElectionTimeL()
 
 		//更新Log
 		if rf.log.getLastIndexL() < args.PrevLogIndex || rf.log.Entries[args.PrevLogIndex].Term != args.PrevLogTerm {
