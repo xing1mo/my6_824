@@ -18,8 +18,9 @@ package raft
 //
 
 import (
+	"6.824/labgob"
+	"bytes"
 	"math/rand"
-	//	"bytes"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,7 +87,7 @@ type Raft struct {
 	replicationCond []*sync.Cond
 
 	//Persistent state on all servers:
-	cureentTerm int //init 1
+	currentTerm int //init 1
 	votedFor    int //init -1,表示没投票
 	log         Log
 
@@ -104,7 +105,7 @@ func (rf *Raft) initServerUL() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	rf.cureentTerm = 0
+	rf.currentTerm = 0
 	rf.votedFor = -1
 	rf.log = Log{make([]Entry, 0)}
 	rf.log.Entries = append(rf.log.Entries, Entry{Term: 0, Index: 0})
@@ -128,7 +129,7 @@ func (rf *Raft) initServerUL() {
 
 	rf.resetElectionTimeL()
 
-	DPrintf("[%v]--init--:Server--Term-%v", rf.me, rf.cureentTerm)
+	DPrintf("[%v]--init--:Server--Term-%v", rf.me, rf.currentTerm)
 }
 
 //init leader
@@ -145,16 +146,18 @@ func (rf *Raft) initLeaderL() {
 	}
 
 	rf.role = Leader
-	DPrintf("[%v]--init--:Leader--Term-%v", rf.me, rf.cureentTerm)
+	DPrintf("[%v]--init--:Leader--Term-%v", rf.me, rf.currentTerm)
 }
 
 //init candidate
 func (rf *Raft) initCandidateL() {
 	rf.role = Candidate
-	rf.cureentTerm++
+	rf.currentTerm++
 	rf.votedFor = rf.me
 
-	DPrintf("[%v]--init--:Candidate--Term-%v", rf.me, rf.cureentTerm)
+	rf.persist()
+
+	DPrintf("[%v]--init--:Candidate--Term-%v", rf.me, rf.currentTerm)
 }
 
 func (rf *Raft) resetElectionTimeL() {
@@ -182,6 +185,7 @@ func (rf *Raft) election() {
 
 // The ticker go routine starts a new election if this peser hasn't received
 // heartsbeats recently.
+//心跳
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
@@ -191,7 +195,7 @@ func (rf *Raft) ticker() {
 		rf.mu.Lock()
 		if rf.role == Leader {
 			rf.resetElectionTimeL()
-			DPrintf("[%v]--doHeartBeat--:begin to send HeartBeat-%v", rf.me, rf.cureentTerm)
+			DPrintf("[%v]--doHeartBeat--:begin to send HeartBeat-%v", rf.me, rf.currentTerm)
 			rf.mu.Unlock()
 			rf.doAppendEntryUL(HeartBeat)
 		} else {
@@ -209,7 +213,7 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
-	term = rf.cureentTerm
+	term = rf.currentTerm
 	isleader = rf.role == Leader
 	return term, isleader
 }
@@ -222,12 +226,13 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -239,17 +244,22 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log Log
+	if err := d.Decode(&currentTerm); err != nil {
+		DPrintf("[%v][read currentTerm error]-%v", rf.me, err)
+	} else if err := d.Decode(&votedFor); err != nil {
+		DPrintf("[%v][read votedFor error]-%v", rf.me, err)
+	} else if err := d.Decode(&log); err != nil {
+		DPrintf("[%v][read log error]-%v", rf.me, err)
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+	}
 }
 
 //
@@ -290,7 +300,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 	rf.mu.Lock()
 	index := len(rf.log.Entries)
-	term := rf.cureentTerm
+	term := rf.currentTerm
 	isLeader := rf.role == Leader
 	if isLeader {
 		DPrintf("[%v]--AcceptCommand--:new entry at Index-%v Term-%v", rf.me, index, term)

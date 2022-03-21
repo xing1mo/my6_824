@@ -32,20 +32,21 @@ type AppendEntriesReply struct {
 //处理收到的RPC
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
+	defer rf.persist()
 	defer rf.mu.Unlock()
 
-	reply.Term = rf.cureentTerm
+	reply.Term = rf.currentTerm
 	reply.NextIndex = 0
-	if args.Term < rf.cureentTerm {
+	if args.Term < rf.currentTerm {
 		//Reply false if term < currentTerm
-		DPrintf("[%v]--AE_Request--LeaderTermLittle--:To [%v],myTerm-%v,LeaderTerm-%v", args.LeaderId, rf.me, rf.cureentTerm, args.Term)
+		DPrintf("[%v]--AE_Request--LeaderTermLittle--:To [%v],myTerm-%v,LeaderTerm-%v", args.LeaderId, rf.me, rf.currentTerm, args.Term)
 		reply.Success = false
 	} else {
-		if args.Term > rf.cureentTerm && rf.role != Follower {
+		if args.Term > rf.currentTerm && rf.role != Follower {
 			DPrintf("[%v]--RoleChange--:get AE_RPC more Term from Leader-%v--", rf.me, args.LeaderId)
 			rf.role = Follower
 		}
-		rf.cureentTerm = args.Term
+		rf.currentTerm = args.Term
 		//rf.resetElectionTimeL()
 
 		//更新Log
@@ -54,13 +55,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			//whose term matches prevLogTerm
 			if rf.log.getLastIndexL() < args.PrevLogIndex {
 				reply.NextIndex = rf.log.getLastIndexL() + 1
-				DPrintf("[%v]--AE_Request--conflict--LackEntry--:To [%v],myTerm-%v,LeaderTerm-%v,LastIndex-%v,PrevLogIndex-%v", args.LeaderId, rf.me, rf.cureentTerm, args.Term, rf.log.getLastIndexL(), args.PrevLogIndex)
+				DPrintf("[%v]--AE_Request--conflict--LackEntry--:To [%v],myTerm-%v,LeaderTerm-%v,LastIndex-%v,PrevLogIndex-%v", args.LeaderId, rf.me, rf.currentTerm, args.Term, rf.log.getLastIndexL(), args.PrevLogIndex)
 			} else {
 				reply.NextIndex = args.PrevLogIndex
 				for reply.NextIndex-1 >= 1 && rf.log.getIndexTermL(reply.NextIndex-1) == rf.log.Entries[args.PrevLogIndex].Term {
 					reply.NextIndex--
 				}
-				DPrintf("[%v]--AE_Request--conflict--ConflictEntry--:To [%v],myTerm-%v,LeaderTerm-%v,Index-%v,myLogTerm-%v,PrevLogTerm-%v", args.LeaderId, rf.me, rf.cureentTerm, args.Term, args.PrevLogIndex, rf.log.Entries[args.PrevLogIndex].Term, args.PrevLogTerm)
+				DPrintf("[%v]--AE_Request--conflict--ConflictEntry--:To [%v],myTerm-%v,LeaderTerm-%v,Index-%v,myLogTerm-%v,PrevLogTerm-%v", args.LeaderId, rf.me, rf.currentTerm, args.Term, args.PrevLogIndex, rf.log.Entries[args.PrevLogIndex].Term, args.PrevLogTerm)
 			}
 
 			reply.Success = false
@@ -80,7 +81,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				DPrintf("[%v]--AE_Request--Ignore--:To [%v],LastIndex-%v,LastTerm-%v", args.LeaderId, rf.me, rf.log.getLastIndexL(), rf.log.getLastTermL())
 			} else {
 				rf.log.Entries = append(rf.log.Entries[0:i], args.Entries[j:]...)
-				DPrintf("[%v]--AE_Request--Success--:To [%v],myTerm-%v,LeaderTerm-%v,afterIndex-%v,LastIndex-%v,LastTerm-%v", args.LeaderId, rf.me, rf.cureentTerm, args.Term, i-1, rf.log.getLastIndexL(), rf.log.getLastTermL())
+				DPrintf("[%v]--AE_Request--Success--:To [%v],myTerm-%v,LeaderTerm-%v,afterIndex-%v,LastIndex-%v,LastTerm-%v", args.LeaderId, rf.me, rf.currentTerm, args.Term, i-1, rf.log.getLastIndexL(), rf.log.getLastTermL())
 
 			}
 
@@ -114,10 +115,10 @@ func (rf *Raft) tryReplicationUL(peer int) {
 		rf.mu.Unlock()
 		return
 	}
-	DPrintf("[%v]--begin2 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+	DPrintf("[%v]--begin2 to [%v]--:term-%v", rf.me, peer, rf.currentTerm)
 	//初始化args
 	args := AppendEntriesArgs{
-		Term:         rf.cureentTerm,
+		Term:         rf.currentTerm,
 		LeaderId:     rf.me,
 		LeaderCommit: rf.commitIndex,
 		Entries:      make([]Entry, 0),
@@ -129,7 +130,7 @@ func (rf *Raft) tryReplicationUL(peer int) {
 	args.PrevLogTerm, args.PrevLogIndex = rf.log.getIndexTermAndIndexL(rf.nextIndex[peer] - 1)
 
 	reply := AppendEntriesReply{}
-	DPrintf("[%v]--begin3 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+	DPrintf("[%v]--begin3 to [%v]--:term-%v", rf.me, peer, rf.currentTerm)
 	rf.mu.Unlock()
 
 	DPrintf("[%v]--begin4 to [%v]--", rf.me, peer)
@@ -137,8 +138,8 @@ func (rf *Raft) tryReplicationUL(peer int) {
 	f := rf.sendAppendEntries(peer, &args, &reply)
 	DPrintf("[%v]--begin5 to [%v]--", rf.me, peer)
 	rf.mu.Lock()
-	if f && rf.role == Leader && rf.cureentTerm == args.Term {
-		DPrintf("[%v]--begin6 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+	if f && rf.role == Leader && rf.currentTerm == args.Term {
+		DPrintf("[%v]--begin6 to [%v]--:term-%v", rf.me, peer, rf.currentTerm)
 		if reply.Success == false {
 			if reply.Term <= args.Term {
 				//更新nextIndex寻找最大共识
@@ -146,9 +147,9 @@ func (rf *Raft) tryReplicationUL(peer int) {
 				DPrintf("[%v]--AE_False--ReduceNext-%v--:fail append to [%v],myTerm_%v,replyTerm_%v", rf.me, rf.nextIndex[peer], peer, args.Term, reply.Term)
 			} else {
 				DPrintf("[%v]--AE_False--TermLittle--:fail append to [%v],myTerm_%v,replyTerm_%v", rf.me, peer, args.Term, reply.Term)
-				if reply.Term > rf.cureentTerm && rf.role != Follower {
-					DPrintf("[%v]--RoleChange--:get AE_Response more Term from [%v]--,myTerm_%v,replyTerm_%v", rf.me, peer, rf.cureentTerm, reply.Term)
-					rf.cureentTerm = reply.Term
+				if reply.Term > rf.currentTerm && rf.role != Follower {
+					DPrintf("[%v]--RoleChange--:get AE_Response more Term from [%v]--,myTerm_%v,replyTerm_%v", rf.me, peer, rf.currentTerm, reply.Term)
+					rf.currentTerm = reply.Term
 					rf.role = Follower
 				}
 
@@ -175,7 +176,7 @@ func (rf *Raft) tryReplicationUL(peer int) {
 				tmp[rf.me] = rf.log.getLen()
 				sort.Ints(tmp)
 				nxtCommitMax := tmp[len(rf.peers)/2]
-				if rf.log.Entries[nxtCommitMax].Term == rf.cureentTerm && nxtCommitMax >= rf.commitIndex {
+				if rf.log.Entries[nxtCommitMax].Term == rf.currentTerm && nxtCommitMax >= rf.commitIndex {
 					//更新commmit
 					if rf.commitIndex == nxtCommitMax {
 						DPrintf("[%v]--AE_True--UpdateCommit--Same:commitIndex-%v,nxtCommitMax-%v", rf.me, rf.commitIndex, nxtCommitMax)
@@ -187,13 +188,16 @@ func (rf *Raft) tryReplicationUL(peer int) {
 					if nxtCommitMax < rf.commitIndex {
 						DPrintf("[%v]--AE_True--UpdateCommit--CommitLittle--:commitIndex-%v,nxtCommitMax-%v,matchIndex-%v", rf.me, rf.commitIndex, nxtCommitMax, rf.matchIndex)
 					} else {
-						DPrintf("[%v]--AE_True--UpdateCommit--TermLittle--:commitIndex-%v,nxtCommitMax-%v,nxtCommitTerm-%v,cureentTerm-%v", rf.me, rf.commitIndex, nxtCommitMax, rf.log.Entries[nxtCommitMax].Term, rf.cureentTerm)
+						DPrintf("[%v]--AE_True--UpdateCommit--TermLittle--:commitIndex-%v,nxtCommitMax-%v,nxtCommitTerm-%v,cureentTerm-%v", rf.me, rf.commitIndex, nxtCommitMax, rf.log.Entries[nxtCommitMax].Term, rf.currentTerm)
 					}
 				}
 			}
 		}
 	}
-	DPrintf("[%v]--begin7 to [%v]--:term-%v", rf.me, peer, rf.cureentTerm)
+	DPrintf("[%v]--begin7 to [%v]--:term-%v", rf.me, peer, rf.currentTerm)
+
+	rf.persist()
+
 	rf.mu.Unlock()
 }
 

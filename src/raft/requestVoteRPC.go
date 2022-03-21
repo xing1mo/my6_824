@@ -30,6 +30,7 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
+	defer rf.persist()
 	defer rf.mu.Unlock()
 
 	//DPrintf("[%v]--RV_Request--:try to get from [%v],CandidateTerm-%v,myTerm-%v,hasVote-%v", args.CandidateId, rf.me, args.Term, rf.cureentTerm, rf.votedFor)
@@ -37,24 +38,24 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	lastLogTerm, lastLogIndex := rf.log.getLastTermAndIndexL()
 
 	//判断是否需要投票
-	if args.Term > rf.cureentTerm {
+	if args.Term > rf.currentTerm {
 		if rf.role != Follower {
 			rf.role = Follower
 			DPrintf("[%v]--RoleChange--:get RV_RPC more Term from Candidate-[%v]--", rf.me, args.CandidateId)
 		}
-		rf.cureentTerm = args.Term
+		rf.currentTerm = args.Term
 		rf.votedFor = -1
 	}
-	if args.Term >= rf.cureentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
+	if args.Term >= rf.currentTerm && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
 		(args.LastLogTerm > lastLogTerm || (args.LastLogTerm == lastLogTerm && args.LastLogIndex >= lastLogIndex)) {
-		rf.cureentTerm = args.Term
+		rf.currentTerm = args.Term
 		rf.votedFor = args.CandidateId
 		rf.resetElectionTimeL()
 		reply.VoteGranted = true
 	} else {
 		reply.VoteGranted = false
 	}
-	reply.Term = rf.cureentTerm
+	reply.Term = rf.currentTerm
 }
 
 //
@@ -94,7 +95,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) initElectionArgsL() *RequestVoteArgs {
 	//参数初始化
 	args := RequestVoteArgs{
-		Term:        rf.cureentTerm,
+		Term:        rf.currentTerm,
 		CandidateId: rf.me,
 	}
 	args.LastLogTerm, args.LastLogIndex = rf.log.getLastTermAndIndexL()
@@ -115,6 +116,7 @@ func (rf *Raft) doElectionUL(args *RequestVoteArgs) {
 	//condition通知多少选票
 	cond := sync.NewCond(&sync.Mutex{})
 
+	rf.persist()
 	rf.mu.Unlock()
 	//发送每个选票请求
 	for i, _ := range rf.peers {
@@ -125,7 +127,7 @@ func (rf *Raft) doElectionUL(args *RequestVoteArgs) {
 
 				cond.L.Lock()
 				rf.mu.Lock()
-				if rf.role != Candidate || rf.cureentTerm != args.Term {
+				if rf.role != Candidate || rf.currentTerm != args.Term {
 					done = true
 					//通知结束选举
 					cond.Broadcast()
@@ -142,9 +144,9 @@ func (rf *Raft) doElectionUL(args *RequestVoteArgs) {
 						//DPrintf("[%v]--RV_Response--:getVote from [%v]", rf.me, idx)
 					} else {
 						//DPrintf("[%v]--RV_Response--:rejectedVote from [%v]", rf.me, idx)
-						if reply.Term > rf.cureentTerm && rf.role != Follower {
-							DPrintf("[%v]--RoleChange--:get RV_Response more Term from [%v]--,myTerm_%v,replyTerm_%v", rf.me, idx, rf.cureentTerm, reply.Term)
-							rf.cureentTerm = reply.Term
+						if reply.Term > rf.currentTerm && rf.role != Follower {
+							DPrintf("[%v]--RoleChange--:get RV_Response more Term from [%v]--,myTerm_%v,replyTerm_%v", rf.me, idx, rf.currentTerm, reply.Term)
+							rf.currentTerm = reply.Term
 							rf.role = Follower
 						}
 					}
@@ -152,6 +154,9 @@ func (rf *Raft) doElectionUL(args *RequestVoteArgs) {
 					//DPrintf("[%v]--RV_Response--:RPC timeout,can't receive response from [%v]", rf.me, idx)
 				}
 				finishCnt++
+
+				rf.persist()
+
 				rf.mu.Unlock()
 				cond.L.Unlock()
 				cond.Broadcast()
@@ -181,6 +186,9 @@ func (rf *Raft) doElectionUL(args *RequestVoteArgs) {
 		DPrintf("[%v]--RoleChange--:Vote Failed", rf.me)
 		rf.role = Follower
 	}
+
+	rf.persist()
+
 	rf.mu.Unlock()
 }
 
