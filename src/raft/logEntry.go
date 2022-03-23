@@ -44,6 +44,10 @@ func (l *Log) getIndexIndexL(index int) int {
 	//fmt.Printf("%v %v %v\n", len(l.Entries), entry.Term, entry.Index)
 	return entry.Index
 }
+func (l *Log) setIndexTermAndIndexL(index int, xInx int, yTerm int) {
+	l.Entries[index].Index = xInx
+	l.Entries[index].Term = yTerm
+}
 func (l *Log) getLen() int {
 	return len(l.Entries)
 }

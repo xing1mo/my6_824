@@ -30,8 +30,8 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
-	defer rf.persist()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	//DPrintf("[%v]--RV_Request--:try to get from [%v],CandidateTerm-%v,myTerm-%v,hasVote-%v", args.CandidateId, rf.me, args.Term, rf.cureentTerm, rf.votedFor)
 	//获得最后log

@@ -18,8 +18,6 @@ package raft
 //
 
 import (
-	"6.824/labgob"
-	"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -124,6 +122,14 @@ func (rf *Raft) initServerUL() {
 			go rf.replicationQueue(i)
 		}
 	}
+
+	// initialize from state persisted before a crash
+	rf.readPersist(rf.persister.ReadRaftState())
+
+	//快照了一定已经commit了
+	rf.lastApplied = rf.log.getIndexIndexL(0)
+	rf.commitIndex = rf.log.getIndexIndexL(0)
+
 	//处理Entry应用到状态机
 	go rf.commitToRSM()
 
@@ -219,70 +225,6 @@ func (rf *Raft) GetState() (int, bool) {
 }
 
 //
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
-//
-func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
-	e.Encode(rf.log)
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
-}
-
-//
-// restore previously persisted state.
-//
-func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
-		return
-	}
-	// Your code here (2C).
-	// Example:
-	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
-	var currentTerm int
-	var votedFor int
-	var log Log
-	if err := d.Decode(&currentTerm); err != nil {
-		DPrintf("[%v][read currentTerm error]-%v", rf.me, err)
-	} else if err := d.Decode(&votedFor); err != nil {
-		DPrintf("[%v][read votedFor error]-%v", rf.me, err)
-	} else if err := d.Decode(&log); err != nil {
-		DPrintf("[%v][read log error]-%v", rf.me, err)
-	} else {
-		rf.currentTerm = currentTerm
-		rf.votedFor = votedFor
-		rf.log = log
-	}
-}
-
-//
-// A service wants to switch to snapshot.  Only do so if Raft hasn't
-// have more recent info since it communicate the snapshot on applyCh.
-//
-func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-
-	// Your code here (2D).
-
-	return true
-}
-
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
-
-}
-
-//
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -299,7 +241,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
 	rf.mu.Lock()
-	index := len(rf.log.Entries)
+	index := rf.log.getLastIndexL() + 1
 	term := rf.currentTerm
 	isLeader := rf.role == Leader
 	if isLeader {
@@ -359,9 +301,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.initServerUL()
-
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
