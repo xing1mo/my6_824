@@ -55,7 +55,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		//rf.resetElectionTimeL()
 
 		//更新Log
-		DPrintf("[%v]getLastIndexL-%v,PrevLogIndex-%v,PrevLogTerm-%v,myEntries-%v,argEntries-%v", rf.me, rf.log.getLastIndexL(), args.PrevLogIndex, args.PrevLogTerm, rf.log, args.Entries)
+		//DPrintf("[%v]getLastIndexL-%v,PrevLogIndex-%v,PrevLogTerm-%v,myEntries-%v,argEntries-%v", rf.me, rf.log.getLastIndexL(), args.PrevLogIndex, args.PrevLogTerm, rf.log, args.Entries)
 		if rf.log.getLastIndexL() < args.PrevLogIndex || rf.log.Entries[args.PrevLogIndex-rf.log.getIndexIndexL(0)].Term != args.PrevLogTerm {
 			//Reply false if log doesn’t contain an entry at prevLogIndex
 			//whose term matches prevLogTerm
@@ -106,7 +106,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		rf.resetElectionTimeL()
 	}
-	DPrintf("[%v]--request_AE_Log--%v", rf.me, rf.log)
+	//DPrintf("[%v]--request_Log--%v\n\n", rf.me, rf.log)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -240,11 +240,11 @@ func (rf *Raft) dealReplicationL(peer int) {
 			nxtMatchIndex = args.Entries[len(args.Entries)-1].Index
 		}
 
-		DPrintf("[%v]peer-%v,nxtMatchIndex-%v,argsEntries-%v", rf.me, peer, nxtMatchIndex, args.Entries)
+		//DPrintf("[%v]peer-%v,nxtMatchIndex-%v,argsEntries-%v", rf.me, peer, nxtMatchIndex, args.Entries)
 		if nxtMatchIndex == rf.matchIndex[peer] {
 			DPrintf("[%v]--AE_Response--Ignore-:success append to [%v]", rf.me, peer)
 		} else if nxtMatchIndex < rf.matchIndex[peer] {
-			DPrintf("[%v]--AE_Response--ignore-:old response to [%v]", rf.me, peer)
+			DPrintf("[%v]--AE_Response--Ignore-:old response to [%v]", rf.me, peer)
 		} else {
 			rf.matchIndex[peer] = nxtMatchIndex
 			rf.nextIndex[peer] = rf.matchIndex[peer] + 1
@@ -264,8 +264,8 @@ func (rf *Raft) tryReplicationUL(peer int) {
 		rf.mu.Unlock()
 		return
 	}
-	DPrintf("[%v]--sendAE_Log--%v", rf.me, rf.log)
-	DPrintf("[%v],peer-%v,nextIndex-%v,Index0-%v", rf.me, peer, rf.nextIndex[peer], rf.log.getIndexIndexL(0))
+	//DPrintf("[%v]--send_Log--%v\n", rf.me, rf.log)
+	//DPrintf("[%v],peer-%v,nextIndex-%v,Index0-%v", rf.me, peer, rf.nextIndex[peer], rf.log.getIndexIndexL(0))
 	//DPrintf("[%v]--begin2 to [%v]--:term-%v", rf.me, peer, rf.currentTerm)
 	if rf.nextIndex[peer] <= rf.log.getIndexIndexL(0) {
 		rf.dealSnapshotL(peer)
@@ -330,7 +330,7 @@ func (rf *Raft) commitToRSM() {
 
 				rf.applyCh <- applyMsg
 				rf.mu.Lock()
-				DPrintf("[%v]--CommitCommand--:index-%v,term-%v", rf.me, rf.lastApplied, rf.log.getIndexTermL(rf.lastApplied-rf.log.getIndexIndexL(0)))
+				DPrintf("[%v]--CommitCommand--:index-%v,term-%v,command-%v", rf.me, rf.lastApplied, rf.log.getIndexTermL(rf.lastApplied-rf.log.getIndexIndexL(0)), applyMsg.Command)
 			}
 			rf.mu.Unlock()
 		} else {

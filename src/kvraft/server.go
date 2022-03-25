@@ -4,25 +4,25 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
-	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
-
-const Debug = false
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
-}
-
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Key       string
+	Value     string
+	Opt       Opt
+	ClientId  int64
+	CommandId int
+}
+
+type LastApply struct {
+	commandId    int
+	commandReply *CommandReply
 }
 
 type KVServer struct {
@@ -35,11 +35,126 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	//保存数据库
+	database DataBase
+	//接受某个index对应的消息
+	waitChan map[int]chan *CommandReply
+	//保存上一次的结果
+	commandApplyTable map[int64]*LastApply
+	//超时重发时间
+	timeout time.Duration
+	//提交该命令时的Term
+	term int
 }
 
+func (kv *KVServer) newWaitChan(index int) chan *CommandReply {
+	kv.waitChan[index] = make(chan *CommandReply)
+	return kv.waitChan[index]
+}
+func (kv *KVServer) delWaitChanUL(index int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	//close(kv.waitChan[index])
+	//delete(kv.waitChan, index)
+	kv.waitChan = make(map[int]chan *CommandReply)
+}
 
+//判断是否是重复命令
+func (kv *KVServer) DuplicationCommand(clientId int64, commandId int) (*CommandReply, bool) {
+	if lastApply, ok := kv.commandApplyTable[clientId]; ok && lastApply.commandId == commandId {
+		return lastApply.commandReply, true
+	}
+	return nil, false
+}
+func (kv *KVServer) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
+	kv.mu.Lock()
+	if reply1, ok := kv.DuplicationCommand(args.ClientId, args.CommandId); ok && args.Op != GET {
+		reply.Value, reply.Err = reply1.Value, reply1.Err
+		DPrintf("[%v]client--DuplicationCommand--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
+		kv.mu.Unlock()
+		return
+	}
+	op := Op{
+		Key:       args.Key,
+		Value:     args.Value,
+		Opt:       args.Op,
+		ClientId:  args.ClientId,
+		CommandId: args.CommandId,
+	}
+	var index int
+	var isLeader bool
+	index, kv.term, isLeader = kv.rf.Start(op)
+	if isLeader == false {
+		reply.Err = ErrWrongLeader
+		DPrintf("[%v]client--NotLeader--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
+		kv.mu.Unlock()
+		return
+	}
+	ch := kv.newWaitChan(index)
+	kv.mu.Unlock()
+	select {
+	case result := <-ch:
+		reply.Value, reply.Err = result.Value, result.Err
+		DPrintf("[%v]client--SuccessCommand--:from [%v] commandId-%v,%v-Key-%v-value-%v-resultValue-%v", kv.me, args.ClientId, args.CommandId, args.Op, args.Key, args.Value, reply.Value)
+	case <-time.After(kv.timeout):
+		reply.Err = Timeout
+		DPrintf("[%v]client--Timeout--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
+	}
+	go kv.delWaitChanUL(index)
+}
+
+//监听是否有Command apply了
+func (kv *KVServer) listenApply() {
+	for !kv.killed() {
+		select {
+		case applyCommand := <-kv.applyCh:
+			{
+				reply := new(CommandReply)
+				if applyCommand.CommandValid {
+					op := applyCommand.Command.(Op)
+
+					kv.mu.Lock()
+
+					//因可能多次提交,重复的commit就不执行了
+					if _, ok := kv.DuplicationCommand(op.ClientId, op.CommandId); ok && op.Opt != GET {
+						kv.mu.Unlock()
+					} else {
+						kv.mu.Unlock()
+						//应用到数据库
+						if op.Opt == GET {
+							reply.Value, reply.Err = kv.database.Get(op.Key)
+						} else if op.Opt == PUT {
+							reply.Err = kv.database.Put(op.Key, op.Value)
+						} else {
+							reply.Err = kv.database.Append(op.Key, op.Value)
+						}
+
+						kv.mu.Lock()
+						//不是leader不提交结果
+						currentTerm, isLeader := kv.rf.GetState()
+						//保存上一次执行结果以及通知返回结果
+						if op.Opt != GET {
+							kv.commandApplyTable[op.ClientId] = &LastApply{
+								commandId:    op.CommandId,
+								commandReply: reply,
+							}
+						}
+
+						//仅在我等结果,并且我是Leader,term没有改变的情况下才返回,否则index被覆盖了导致错误
+						if ch, ok := kv.waitChan[applyCommand.CommandIndex]; ok && isLeader && currentTerm == kv.term {
+							ch <- reply
+						}
+						kv.mu.Unlock()
+					}
+				}
+			}
+
+		}
+	}
+}
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -94,8 +209,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.database = DataBase{table: make(map[string]string, 10)}
+	kv.waitChan = make(map[int]chan *CommandReply, 10)
+	kv.commandApplyTable = make(map[int64]*LastApply, 10)
+	kv.timeout = time.Duration(100) * time.Millisecond
 
 	// You may need initialization code here.
 
+	go kv.listenApply()
 	return kv
 }

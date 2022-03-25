@@ -202,6 +202,7 @@ func (rf *Raft) ticker() {
 		if rf.role == Leader {
 			rf.resetElectionTimeL()
 			DPrintf("[%v]--doHeartBeat--:begin to send HeartBeat-%v", rf.me, rf.currentTerm)
+			//DPrintf("[%v]--send_Log--%v\n\n", rf.me, rf.log)
 			rf.mu.Unlock()
 			rf.doAppendEntryUL(HeartBeat)
 		} else {
@@ -245,7 +246,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := rf.currentTerm
 	isLeader := rf.role == Leader
 	if isLeader {
-		DPrintf("[%v]--AcceptCommand--:new entry at Index-%v Term-%v", rf.me, index, term)
+		DPrintf("[%v]--AcceptCommand--:new entry at Index-%v Term-%v,Command-%v", rf.me, index, term, command)
 		rf.log.appendEntryL(Entry{
 			Term:    term,
 			Index:   index,

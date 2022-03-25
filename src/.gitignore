@@ -10,7 +10,14 @@ mrtmp.*
 /main/mrcoordinator
 /main/mrsequential
 /main/mrworker
+
 /raft/test-*.log
 /raft/test-*.err
 /raft/tester
 /raft/tmp.txt
+
+/kvraft/go-test-many.sh
+/kvraft/test-*.log
+/kvraft/test-*.err
+/kvraft/tester
+/kvraft/tmp.txt
