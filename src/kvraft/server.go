@@ -4,6 +4,7 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"bytes"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,8 +22,8 @@ type Op struct {
 }
 
 type LastApply struct {
-	commandId    int
-	commandReply *CommandReply
+	CommandId    int
+	CommandReply *CommandReply
 }
 
 type KVServer struct {
@@ -45,6 +46,10 @@ type KVServer struct {
 	timeout time.Duration
 	//提交该命令时的Term
 	term int
+	//上次执行命令的位置
+	lastApplyIndex int
+	//上次snapshot的位置
+	//lastSnapshotIndex int
 }
 
 func (kv *KVServer) newWaitChan(index int) chan *CommandReply {
@@ -61,8 +66,8 @@ func (kv *KVServer) delWaitChanUL(index int) {
 
 //判断是否是重复命令
 func (kv *KVServer) DuplicationCommand(clientId int64, commandId int) (*CommandReply, bool) {
-	if lastApply, ok := kv.commandApplyTable[clientId]; ok && lastApply.commandId == commandId {
-		return lastApply.commandReply, true
+	if lastApply, ok := kv.commandApplyTable[clientId]; ok && lastApply.CommandId == commandId {
+		return lastApply.CommandReply, true
 	}
 	return nil, false
 }
@@ -70,7 +75,7 @@ func (kv *KVServer) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	kv.mu.Lock()
 	if reply1, ok := kv.DuplicationCommand(args.ClientId, args.CommandId); ok && args.Op != GET {
 		reply.Value, reply.Err = reply1.Value, reply1.Err
-		DPrintf("[%v]client--DuplicationCommand--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
+		//DPrintf("[%v]client--DuplicationCommand--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
 		kv.mu.Unlock()
 		return
 	}
@@ -86,7 +91,7 @@ func (kv *KVServer) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	index, kv.term, isLeader = kv.rf.Start(op)
 	if isLeader == false {
 		reply.Err = ErrWrongLeader
-		DPrintf("[%v]client--NotLeader--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
+		//DPrintf("[%v]client--NotLeader--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
 		kv.mu.Unlock()
 		return
 	}
@@ -95,10 +100,10 @@ func (kv *KVServer) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	select {
 	case result := <-ch:
 		reply.Value, reply.Err = result.Value, result.Err
-		DPrintf("[%v]client--SuccessCommand--:from [%v] commandId-%v,%v-Key-%v-value-%v-resultValue-%v", kv.me, args.ClientId, args.CommandId, args.Op, args.Key, args.Value, reply.Value)
+		//DPrintf("[%v]client--SuccessCommand--:from [%v] commandId-%v,%v-Key-%v-value-%v-resultValue-%v", kv.me, args.ClientId, args.CommandId, args.Op, args.Key, args.Value, reply.Value)
 	case <-time.After(kv.timeout):
 		reply.Err = Timeout
-		DPrintf("[%v]client--Timeout--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
+		//DPrintf("[%v]client--Timeout--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
 	}
 	go kv.delWaitChanUL(index)
 }
@@ -130,13 +135,14 @@ func (kv *KVServer) listenApply() {
 						}
 
 						kv.mu.Lock()
+						kv.lastApplyIndex = applyCommand.CommandIndex
 						//不是leader不提交结果
 						currentTerm, isLeader := kv.rf.GetState()
 						//保存上一次执行结果以及通知返回结果
 						if op.Opt != GET {
 							kv.commandApplyTable[op.ClientId] = &LastApply{
-								commandId:    op.CommandId,
-								commandReply: reply,
+								CommandId:    op.CommandId,
+								CommandReply: reply,
 							}
 						}
 
@@ -146,10 +152,81 @@ func (kv *KVServer) listenApply() {
 						}
 						kv.mu.Unlock()
 					}
+				} else if applyCommand.SnapshotValid && kv.rf.CondInstallSnapshot(applyCommand.SnapshotTerm, applyCommand.SnapshotIndex, applyCommand.Snapshot) {
+					kv.mu.Lock()
+					kv.lastApplyIndex = applyCommand.SnapshotIndex
+					kv.setSnapshot(applyCommand.Snapshot)
+					kv.mu.Unlock()
 				}
 			}
 
 		}
+	}
+}
+
+//轮询log的大小看是否需要Snapshot
+func (kv *KVServer) listenSnapshot() {
+	for !kv.killed() {
+		kv.mu.Lock()
+		if kv.rf.GetPersist().RaftStateSize() >= kv.maxraftstate/4*3 {
+			kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotUL())
+			for s, s2 := range kv.database.Table {
+				DPrintf("listenSnapshot:%v--%v\n\n", s, s2)
+			}
+		}
+		kv.mu.Unlock()
+		time.Sleep(time.Duration(10) * time.Millisecond)
+	}
+}
+
+//获得当前状态机的snapshot
+func (kv *KVServer) getSnapshotUL() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	kv.database.Mu.Lock()
+	e.Encode(kv.database.Table)
+	kv.database.Mu.Unlock()
+
+	//e.Encode(kv.waitChan)
+	e.Encode(kv.commandApplyTable)
+	e.Encode(kv.term)
+	//e.Encode(kv.lastSnapshotIndex)
+	data := w.Bytes()
+	return data
+}
+
+//重启读取snapshot时初始化状态机
+func (kv *KVServer) setSnapshot(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	var Table map[string]string
+	//var waitChan map[int]chan *CommandReply
+	var commandApplyTable map[int64]*LastApply
+	var term int
+	//var lastSnapshotIndex int
+	if err := d.Decode(&Table); err != nil {
+		DPrintf("[%v][read Table error]-%v", kv.me, err)
+	} else if err := d.Decode(&commandApplyTable); err != nil {
+		DPrintf("[%v][read commandApplyTable error]-%v", kv.me, err)
+	} else if err := d.Decode(&term); err != nil {
+		DPrintf("[%v][read term error]-%v", kv.me, err)
+	} else {
+		kv.database.Table = Table
+		//kv.waitChan = waitChan
+		kv.commandApplyTable = commandApplyTable
+		kv.term = term
+		//kv.lastSnapshotIndex = lastSnapshotIndex
+		//kv.mu.Lock()
+		//for s, s2 := range kv.database.Table {
+		//	DPrintf("listenSnapshot:%v--%v\n\n", s, s2)
+		//}
+		//kv.mu.Unlock()
 	}
 }
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -209,13 +286,21 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-	kv.database = DataBase{table: make(map[string]string, 10)}
+
+	kv.database = DataBase{Table: make(map[string]string, 10)}
 	kv.waitChan = make(map[int]chan *CommandReply, 10)
 	kv.commandApplyTable = make(map[int64]*LastApply, 10)
 	kv.timeout = time.Duration(100) * time.Millisecond
+	kv.lastApplyIndex = 0
+	//kv.lastSnapshotIndex = 0
 
+	//读取snapshot
+	kv.setSnapshot(persister.ReadSnapshot())
 	// You may need initialization code here.
 
+	if maxraftstate != -1 {
+		go kv.listenSnapshot()
+	}
 	go kv.listenApply()
 	return kv
 }

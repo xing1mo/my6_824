@@ -3,33 +3,33 @@ package kvraft
 import "sync"
 
 type DataBase struct {
-	mu    sync.Mutex
-	table map[string]string
+	Mu    sync.Mutex
+	Table map[string]string
 }
 
 func (db *DataBase) Get(key string) (string, Err) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if value, ok := db.table[key]; ok {
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
+	if value, ok := db.Table[key]; ok {
 		return value, OK
 	}
 	return "", ErrNoKey
 }
 
 func (db *DataBase) Put(key string, value string) Err {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	db.table[key] = value
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
+	db.Table[key] = value
 	return OK
 }
 
 func (db *DataBase) Append(key string, value string) Err {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if _, ok := db.table[key]; ok {
-		db.table[key] += value
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
+	if _, ok := db.Table[key]; ok {
+		db.Table[key] += value
 	} else {
-		db.table[key] = value
+		db.Table[key] = value
 	}
 	return OK
 }
