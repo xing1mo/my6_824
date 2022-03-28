@@ -67,7 +67,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				for reply.NextIndex-rf.log.getIndexIndexL(0)-1 >= 1 && rf.log.getIndexTermL(reply.NextIndex-rf.log.getIndexIndexL(0)-1) == rf.log.Entries[args.PrevLogIndex-rf.log.getIndexIndexL(0)].Term {
 					reply.NextIndex--
 				}
-				DPrintf("[%v]--AE_Request--conflict--ConflictEntry--:To [%v],myTerm-%v,LeaderTerm-%v,Index-%v,myLogTerm-%v,PrevLogTerm-%v", args.LeaderId, rf.me, rf.currentTerm, args.Term, args.PrevLogIndex, rf.log.Entries[args.PrevLogIndex].Term, args.PrevLogTerm)
+				DPrintf("[%v]--AE_Request--conflict--ConflictEntry--:To [%v],myTerm-%v,LeaderTerm-%v,Index-%v,myLogTerm-%v,PrevLogTerm-%v", args.LeaderId, rf.me, rf.currentTerm, args.Term, args.PrevLogIndex, rf.log.Entries[args.PrevLogIndex-rf.log.getIndexIndexL(0)].Term, args.PrevLogTerm)
 			}
 
 			reply.Success = false
@@ -121,8 +121,10 @@ func (rf *Raft) updateCommitIndexL() {
 	tmp[rf.me] = rf.log.getLastIndexL()
 	sort.Ints(tmp)
 	nxtCommitMax := tmp[len(rf.peers)/2]
-	//DPrintf("matchIndex-%v,nxtCommitMax-%v,Log-%v", rf.matchIndex, nxtCommitMax, rf.log)
-	if rf.log.getIndexTermL(nxtCommitMax-rf.log.getIndexIndexL(0)) == rf.currentTerm && nxtCommitMax >= rf.commitIndex {
+
+	//DPrintf("[%v]--matchIndex-%v,nxtCommitMax-%v,Index0-%v\n\n", rf.me, rf.matchIndex, nxtCommitMax, rf.log.getIndexIndexL(0))
+	//一定要先判断commitIndex是不是小些,因为它初始化比现有的snapshotIndex大,否则可能数组越界
+	if nxtCommitMax >= rf.commitIndex && rf.log.getIndexTermL(nxtCommitMax-rf.log.getIndexIndexL(0)) == rf.currentTerm {
 		//更新commmit
 		if rf.commitIndex == nxtCommitMax {
 			DPrintf("[%v]--AE_True--UpdateCommit--Same:commitIndex-%v,nxtCommitMax-%v", rf.me, rf.commitIndex, nxtCommitMax)

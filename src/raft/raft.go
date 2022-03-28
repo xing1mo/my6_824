@@ -135,7 +135,7 @@ func (rf *Raft) initServerUL() {
 
 	rf.resetElectionTimeL()
 
-	DPrintf("[%v]--init--:Server--Term-%v", rf.me, rf.currentTerm)
+	DPrintf("[%v]--init--:Server--Term-%v-lastApplied-%v-commitIndex-%v", rf.me, rf.currentTerm, rf.lastApplied, rf.commitIndex)
 }
 
 //init leader
