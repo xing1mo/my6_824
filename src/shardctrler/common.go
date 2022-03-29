@@ -1,5 +1,17 @@
 package shardctrler
 
+import "log"
+
+// Debugging
+const Debug = true
+
+func DPrintf(format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+	return
+}
+
 //
 // Shard controler: assigns shards to replication groups.
 //
@@ -29,10 +41,35 @@ type Config struct {
 }
 
 const (
-	OK = "OK"
+	OK             = "OK"
+	Timeout        = "Timeout"
+	ErrWrongLeader = "ErrWrongLeader"
 )
 
 type Err string
+
+type Opt string
+
+const (
+	Query Opt = "Query"
+	Join  Opt = "Join"
+	Leave Opt = "Leave"
+	Move  Opt = "Move"
+)
+
+type CommandArgs struct {
+	Op        Opt
+	ClientId  int64
+	CommandId int
+	JoinArg   JoinArgs
+	LeaveArg  LeaveArgs
+	MoveArg   MoveArgs
+	QueryArg  QueryArgs
+}
+type CommandReply struct {
+	Err    Err
+	Config Config
+}
 
 type JoinArgs struct {
 	Servers map[int][]string // new GID -> servers mappings

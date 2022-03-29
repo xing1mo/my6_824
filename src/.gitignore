@@ -21,3 +21,9 @@ mrtmp.*
 /kvraft/test-*.err
 /kvraft/tester
 /kvraft/tmp.txt
+
+/shardctrler/go-test-many.sh
+/shardctrler/test-*.log
+/shardctrler/test-*.err
+/shardctrler/tester
+/shardctrler/tmp.txt
