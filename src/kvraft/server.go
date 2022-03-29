@@ -124,8 +124,8 @@ func (kv *KVServer) listenApply() {
 					if _, ok := kv.DuplicationCommand(op.ClientId, op.CommandId); ok && op.Opt != GET {
 						kv.mu.Unlock()
 					} else {
-						kv.mu.Unlock()
 						//应用到数据库
+						//对数据库操作要上锁,防止state改了但applyIndex没改,快照出错
 						if op.Opt == GET {
 							reply.Value, reply.Err = kv.database.Get(op.Key)
 						} else if op.Opt == PUT {
@@ -134,7 +134,6 @@ func (kv *KVServer) listenApply() {
 							reply.Err = kv.database.Append(op.Key, op.Value)
 						}
 
-						kv.mu.Lock()
 						kv.lastApplyIndex = applyCommand.CommandIndex
 						//不是leader不提交结果
 						currentTerm, isLeader := kv.rf.GetState()
