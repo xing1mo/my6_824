@@ -42,6 +42,9 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	//标识该命令生成时的term,若后续的Term发生变化,表示重新选举了,旧的命令不执行
+	//server失去leader地位或者Term改变后，抛弃apply结果，因为可能原index被覆盖了，导致出现错误结果
+	CommandTerm int
 
 	// For 2D:
 	SnapshotValid bool

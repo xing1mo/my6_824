@@ -19,6 +19,11 @@ type Op struct {
 	Opt       Opt
 	ClientId  int64
 	CommandId int
+
+	//标识该命令生成时的term,若后续的Term发生变化,表示重新选举了,旧的命令不执行
+	//server失去leader地位或者Term改变后，抛弃apply结果，因为可能原index被覆盖了，导致出现错误结果
+	//不能标识在这里,因为提交操作时拿不到Term,会导致多次加锁出现Term不对,修改RAFT记录Term
+	//Term int
 }
 
 type LastApply struct {
@@ -45,7 +50,8 @@ type KVServer struct {
 	//超时重发时间
 	timeout time.Duration
 	//提交该命令时的Term
-	term int
+	//Lab4因不只有client的请求生成Log了,因此每条Log都需要标记Term,修改RAFT记录
+	//term int
 	//上次执行命令的位置
 	lastApplyIndex int
 	//上次snapshot的位置
@@ -53,15 +59,24 @@ type KVServer struct {
 }
 
 func (kv *KVServer) newWaitChan(index int) chan *CommandReply {
-	kv.waitChan[index] = make(chan *CommandReply)
+	//3.一开始在Lab3中使用chan监测是否有Log提交，从而触发数据返回给客户端。
+	//在对chan进行删除时使用的方法是chan直接清空，这里在Lab3中因为只有client中的请求会生成chan所以没有问题。
+	//但到了Lab4有了config的更改，需要删除对应index处的chan，这时会出现卡死的情况，
+	//当命令超时重发时间延长到500ms可以解决，但并不知道原因。后发现存在一种情况，
+	//即一个Log在Raft层成功提交了，但没有及时被kv数据库接收到，导致超时重发，
+	//但超时删除chan的时候需要锁，没有及时将chan删除，这时Log提交被检测到然后抢锁了，
+	//将数据写入本该删除的chan，而此时chan的接收端已被超时触发，导致阻塞,将chan改为非阻塞的。
+	kv.waitChan[index] = make(chan *CommandReply, 2)
 	return kv.waitChan[index]
 }
 func (kv *KVServer) delWaitChanUL(index int) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	//close(kv.waitChan[index])
-	//delete(kv.waitChan, index)
-	kv.waitChan = make(map[int]chan *CommandReply)
+	close(kv.waitChan[index])
+	delete(kv.waitChan, index)
+
+	//Lab4不能统一删除
+	//kv.waitChan = make(map[int]chan *CommandReply)
 }
 
 //判断是否是重复命令
@@ -88,7 +103,8 @@ func (kv *KVServer) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	}
 	var index int
 	var isLeader bool
-	index, kv.term, isLeader = kv.rf.Start(op)
+	//op.Term, _ = kv.rf.GetState()
+	index, _, isLeader = kv.rf.Start(op)
 	if isLeader == false {
 		reply.Err = ErrWrongLeader
 		//DPrintf("[%v]client--NotLeader--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
@@ -117,7 +133,6 @@ func (kv *KVServer) listenApply() {
 				reply := new(CommandReply)
 				if applyCommand.CommandValid {
 					op := applyCommand.Command.(Op)
-
 					kv.mu.Lock()
 
 					//因可能多次提交,重复的commit就不执行了
@@ -144,9 +159,8 @@ func (kv *KVServer) listenApply() {
 								CommandReply: reply,
 							}
 						}
-
 						//仅在我等结果,并且我是Leader,term没有改变的情况下才返回,否则index被覆盖了导致错误
-						if ch, ok := kv.waitChan[applyCommand.CommandIndex]; ok && isLeader && currentTerm == kv.term {
+						if ch, ok := kv.waitChan[applyCommand.CommandIndex]; ok && isLeader && currentTerm == applyCommand.CommandTerm {
 							ch <- reply
 						}
 						kv.mu.Unlock()
@@ -189,7 +203,7 @@ func (kv *KVServer) getSnapshotUL() []byte {
 
 	//e.Encode(kv.waitChan)
 	e.Encode(kv.commandApplyTable)
-	e.Encode(kv.term)
+	//e.Encode(kv.term)
 	//e.Encode(kv.lastSnapshotIndex)
 	data := w.Bytes()
 	return data
@@ -207,19 +221,16 @@ func (kv *KVServer) setSnapshot(data []byte) {
 	var Table map[string]string
 	//var waitChan map[int]chan *CommandReply
 	var commandApplyTable map[int64]*LastApply
-	var term int
 	//var lastSnapshotIndex int
 	if err := d.Decode(&Table); err != nil {
 		DPrintf("[%v][read Table error]-%v", kv.me, err)
 	} else if err := d.Decode(&commandApplyTable); err != nil {
 		DPrintf("[%v][read commandApplyTable error]-%v", kv.me, err)
-	} else if err := d.Decode(&term); err != nil {
-		DPrintf("[%v][read term error]-%v", kv.me, err)
 	} else {
 		kv.database.Table = Table
 		//kv.waitChan = waitChan
 		kv.commandApplyTable = commandApplyTable
-		kv.term = term
+		//kv.term = term
 		//kv.lastSnapshotIndex = lastSnapshotIndex
 		//kv.mu.Lock()
 		//for s, s2 := range kv.database.Table {

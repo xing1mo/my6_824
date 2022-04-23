@@ -48,7 +48,7 @@ func (ck *Clerk) sendCommand(op Opt, command interface{}) Config {
 	} else if op == Move {
 		args.MoveArg = command.(MoveArgs)
 	}
-	DPrintf("[%v]client--newCommand[%v]--:commandId-%v,%v\n\n", ck.clientId, op, ck.commandId, command)
+	//DPrintf("[%v]SC-Client--newCommand[%v]--:commandId-%v,%v\n\n", ck.clientId, op, ck.commandId, command)
 
 	reply := CommandReply{}
 	for true {

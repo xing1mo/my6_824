@@ -84,7 +84,7 @@ func (ck *Clerk) sendCommand(key string, value string, op Opt) string {
 		ClientId:  ck.clientId,
 		CommandId: ck.commandId,
 	}
-	DPrintf("[%v]server--newCommand--:commandId-%v,%v-%v-%v\n\n", ck.clientId, ck.commandId, op, key, value)
+	DPrintf("[%v]Client--newCommand--:commandId-%v,%v-%v-%v\n\n", ck.clientId, ck.commandId, op, key, value)
 	ck.mu.Unlock()
 
 	reply := CommandReply{}
@@ -96,7 +96,7 @@ func (ck *Clerk) sendCommand(key string, value string, op Opt) string {
 		//DPrintf("ok-%v,Err-%v", ok, reply.Err)
 		if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 			ck.mu.Lock()
-			//DPrintf("[%v]Server--receiveCommand--:commandId-%v,%v-Key-%v-value-%v-resultValue-%v", args.ClientId, args.CommandId, args.Op, args.Key, args.Value, reply.Value)
+			DPrintf("[%v]Client--SuccessCommand--:commandId-%v,%v-Key-%v-value-%v-resultValue-%v", args.ClientId, args.CommandId, args.Op, args.Key, args.Value, reply.Value)
 			ck.commandId++
 			ck.mu.Unlock()
 			return reply.Value

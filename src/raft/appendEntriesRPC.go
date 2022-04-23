@@ -327,6 +327,7 @@ func (rf *Raft) commitToRSM() {
 					CommandValid: true,
 					Command:      rf.log.Entries[rf.lastApplied-rf.log.getIndexIndexL(0)].Command,
 					CommandIndex: rf.lastApplied,
+					CommandTerm:  rf.log.Entries[rf.lastApplied-rf.log.getIndexIndexL(0)].Term,
 				}
 				rf.mu.Unlock()
 

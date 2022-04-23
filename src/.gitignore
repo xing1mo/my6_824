@@ -27,3 +27,4 @@ mrtmp.*
 /shardctrler/test-*.err
 /shardctrler/tester
 /shardctrler/tmp.txt
+/test.go

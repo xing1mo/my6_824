@@ -69,7 +69,7 @@ func (sc *ShardCtrler) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	sc.mu.Lock()
 	if _, ok := sc.DuplicationCommand(args.ClientId, args.CommandId); ok && args.Op != Query {
 		reply.Err = OK
-		DPrintf("[%v]server--DuplicationCommand[%v]--:from [%v] commandId-%v", sc.me, args.Op, args.ClientId, args.CommandId)
+		//DPrintf("[%v]server--DuplicationCommand[%v]--:from [%v] commandId-%v", sc.me, args.Op, args.ClientId, args.CommandId)
 		sc.mu.Unlock()
 		return
 	}
@@ -102,10 +102,15 @@ func (sc *ShardCtrler) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	select {
 	case result := <-ch:
 		reply.Config, reply.Err = *result, OK
-		DPrintf("[%v]server--SuccessCommand[%v]--:from [%v] commandId-%v,reply-[%v],Command-[%v]", sc.me, args.Op, args.ClientId, args.CommandId, reply, op)
+		//DPrintf("[%v]sc_server--ConfigChange[%v]--:from [%v] commandId-%v,reply-[%v],Command-[%v]", sc.me, args.Op, args.ClientId, args.CommandId, reply, op)
+		sc.mu.Lock()
+		if args.Op != Query {
+			DPrintf("[%v]sc_server--ConfigChange[%v]--: config-%v,Command-%v", sc.me, args.Op, sc.configs[len(sc.configs)-1], op)
+		}
+		sc.mu.Unlock()
 	case <-time.After(sc.timeout):
 		reply.Err = Timeout
-		DPrintf("[%v]server--Timeout[%v]--:from [%v] commandId-%v", sc.me, args.Op, args.ClientId, args.CommandId)
+		//DPrintf("[%v]server--Timeout[%v]--:from [%v] commandId-%v", sc.me, args.Op, args.ClientId, args.CommandId)
 	}
 	go sc.delWaitChanUL()
 }
