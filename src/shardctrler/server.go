@@ -34,7 +34,7 @@ type ShardCtrler struct {
 	//超时重发时间
 	timeout time.Duration
 	//提交该命令时的Term
-	term int
+	//term int
 }
 
 type Op struct {
@@ -48,13 +48,14 @@ type Op struct {
 }
 
 func (sc *ShardCtrler) newWaitChan(index int) chan *Config {
-	sc.waitChan[index] = make(chan *Config)
+	sc.waitChan[index] = make(chan *Config, 2)
 	return sc.waitChan[index]
 }
-func (sc *ShardCtrler) delWaitChanUL() {
+func (sc *ShardCtrler) delWaitChanUL(index int) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	sc.waitChan = make(map[int]chan *Config)
+	close(sc.waitChan[index])
+	delete(sc.waitChan, index)
 }
 
 //判断是否是重复命令
@@ -90,7 +91,7 @@ func (sc *ShardCtrler) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 
 	var index int
 	var isLeader bool
-	index, sc.term, isLeader = sc.rf.Start(op)
+	index, _, isLeader = sc.rf.Start(op)
 	if isLeader == false {
 		reply.Err = ErrWrongLeader
 		//DPrintf("[%v]server--NotLeader[%v]--:from [%v] commandId-%v", sc.me, args.Op, args.ClientId, args.CommandId)
@@ -105,14 +106,14 @@ func (sc *ShardCtrler) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 		//DPrintf("[%v]sc_server--ConfigChange[%v]--:from [%v] commandId-%v,reply-[%v],Command-[%v]", sc.me, args.Op, args.ClientId, args.CommandId, reply, op)
 		sc.mu.Lock()
 		if args.Op != Query {
-			DPrintf("[%v]sc_server--ConfigChange[%v]--: config-%v,Command-%v", sc.me, args.Op, sc.configs[len(sc.configs)-1], op)
+			DPrintf("[%v]sc_server--ConfigChange[%v]--: config-%v,Command-%v\n\n", sc.me, args.Op, sc.configs[len(sc.configs)-1], op)
 		}
 		sc.mu.Unlock()
 	case <-time.After(sc.timeout):
 		reply.Err = Timeout
 		//DPrintf("[%v]server--Timeout[%v]--:from [%v] commandId-%v", sc.me, args.Op, args.ClientId, args.CommandId)
 	}
-	go sc.delWaitChanUL()
+	go sc.delWaitChanUL(index)
 }
 
 //监听是否有Command apply了
@@ -184,7 +185,7 @@ func (sc *ShardCtrler) listenApply() {
 						}
 
 						//仅在我等结果,并且我是Leader,term没有改变的情况下才返回,否则index被覆盖了导致错误
-						if ch, ok := sc.waitChan[applyCommand.CommandIndex]; ok && isLeader && currentTerm == sc.term {
+						if ch, ok := sc.waitChan[applyCommand.CommandIndex]; ok && isLeader && currentTerm == applyCommand.CommandTerm {
 							ch <- reply
 						}
 						sc.mu.Unlock()
@@ -296,142 +297,6 @@ func (sc *ShardCtrler) copyConfig(config *Config) *Config {
 	return result
 }
 
-//func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
-//	sc.mu.Lock()
-//	if _, ok := sc.DuplicationCommand(args.ClientId, args.CommandId); ok {
-//		reply.WrongLeader, reply.Err = false, OK
-//		DPrintf("[%v]server--DuplicationCommand[Join]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//		sc.mu.Unlock()
-//		return
-//	}
-//	op := Op{
-//		Opt:     Join,
-//		Command: *args,
-//	}
-//	var index int
-//	var isLeader bool
-//	index, sc.term, isLeader = sc.rf.Start(op)
-//	if isLeader == false {
-//		reply.WrongLeader = true
-//		DPrintf("[%v]server--NotLeader[Join]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//		sc.mu.Unlock()
-//		return
-//	}
-//	ch := sc.newWaitChan(index)
-//	sc.mu.Unlock()
-//	select {
-//	case <-ch:
-//		reply.WrongLeader, reply.Err = false, OK
-//		DPrintf("[%v]server--SuccessCommand[Join]--:from [%v] commandId-%v,servers-%v", sc.me, args.ClientId, args.CommandId, args.Servers)
-//	case <-time.After(sc.timeout):
-//		reply.WrongLeader, reply.Err = false, Timeout
-//		DPrintf("[%v]server--Timeout[Join]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//	}
-//	go sc.delWaitChanUL()
-//}
-//
-//func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
-//	sc.mu.Lock()
-//	if _, ok := sc.DuplicationCommand(args.ClientId, args.CommandId); ok {
-//		reply.WrongLeader, reply.Err = false, OK
-//		DPrintf("[%v]server--DuplicationCommand[Leave]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//		sc.mu.Unlock()
-//		return
-//	}
-//	op := Op{
-//		Opt:     Leave,
-//		Command: *args,
-//	}
-//	var index int
-//	var isLeader bool
-//	index, sc.term, isLeader = sc.rf.Start(op)
-//	if isLeader == false {
-//		reply.WrongLeader = true
-//		DPrintf("[%v]server--NotLeader[Leave]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//		sc.mu.Unlock()
-//		return
-//	}
-//	ch := sc.newWaitChan(index)
-//	sc.mu.Unlock()
-//	select {
-//	case <-ch:
-//		reply.WrongLeader, reply.Err = false, OK
-//		DPrintf("[%v]server--SuccessCommand[Leave]--:from [%v] commandId-%v,GIDs-%v", sc.me, args.ClientId, args.CommandId, args.GIDs)
-//	case <-time.After(sc.timeout):
-//		reply.WrongLeader, reply.Err = false, Timeout
-//		DPrintf("[%v]server--Timeout[Leave]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//	}
-//	go sc.delWaitChanUL()
-//}
-//
-//func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
-//	sc.mu.Lock()
-//	if _, ok := sc.DuplicationCommand(args.ClientId, args.CommandId); ok {
-//		reply.WrongLeader, reply.Err = false, OK
-//		DPrintf("[%v]server--DuplicationCommand[Move]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//		sc.mu.Unlock()
-//		return
-//	}
-//	op := Op{
-//		Opt:     Move,
-//		Command: *args,
-//	}
-//	var index int
-//	var isLeader bool
-//	index, sc.term, isLeader = sc.rf.Start(op)
-//	if isLeader == false {
-//		reply.WrongLeader = true
-//		DPrintf("[%v]server--NotLeader[Move]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//		sc.mu.Unlock()
-//		return
-//	}
-//	ch := sc.newWaitChan(index)
-//	sc.mu.Unlock()
-//	select {
-//	case <-ch:
-//		reply.WrongLeader, reply.Err = false, OK
-//		DPrintf("[%v]server--SuccessCommand[Move]--:from [%v] commandId-%v,shard-%v,gid-%v", sc.me, args.ClientId, args.CommandId, args.Shard, args.GID)
-//	case <-time.After(sc.timeout):
-//		reply.WrongLeader, reply.Err = false, Timeout
-//		DPrintf("[%v]server--Timeout[Move]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//	}
-//	go sc.delWaitChanUL()
-//}
-//
-//func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
-//	sc.mu.Lock()
-//	if reply1, ok := sc.DuplicationCommand(args.ClientId, args.CommandId); ok {
-//		reply.Config, reply.WrongLeader, reply.Err = *reply1, false, OK
-//		DPrintf("[%v]server--DuplicationCommand[Query]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//		sc.mu.Unlock()
-//		return
-//	}
-//	op := Op{
-//		Opt:     Move,
-//		Command: *args,
-//	}
-//	var index int
-//	var isLeader bool
-//	index, sc.term, isLeader = sc.rf.Start(op)
-//	if isLeader == false {
-//		reply.WrongLeader = true
-//		DPrintf("[%v]server--NotLeader[Query]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//		sc.mu.Unlock()
-//		return
-//	}
-//	ch := sc.newWaitChan(index)
-//	sc.mu.Unlock()
-//	select {
-//	case <-ch:
-//		reply.WrongLeader, reply.Err = false, OK
-//		DPrintf("[%v]server--SuccessCommand[Query]--:from [%v] commandId-%v,num-%v", sc.me, args.ClientId, args.CommandId, args.Num)
-//	case <-time.After(sc.timeout):
-//		reply.WrongLeader, reply.Err = false, Timeout
-//		DPrintf("[%v]server--Timeout[Query]--:from [%v] commandId-%v", sc.me, args.ClientId, args.CommandId)
-//	}
-//	go sc.delWaitChanUL()
-//}
-
 //
 // the tester calls Kill() when a ShardCtrler instance won't
 // be needed again. you are not required to do anything
@@ -474,7 +339,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	// Your code here.
 	sc.waitChan = make(map[int]chan *Config, 10)
 	sc.commandApplyTable = make(map[int64]*LastApply, 10)
-	sc.timeout = time.Duration(200) * time.Millisecond
+	sc.timeout = time.Duration(500) * time.Millisecond
 
 	go sc.listenApply()
 	return sc

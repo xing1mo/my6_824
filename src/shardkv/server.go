@@ -24,14 +24,17 @@ type Op struct {
 	//标识该命令生成时的term,若后续的Term发生变化,表示重新选举了,旧的命令不执行
 	//Term int
 
-	Shard     int
-	ConfigNum int
-	Data      map[string]string
+	Shard             int
+	ConfigNum         int
+	Data              map[string]string
+	CommandApplyTable map[int64]*LastApply
 }
 
 type LastApply struct {
 	CommandId    int
 	CommandReply *CommandReply
+	//进行shard数据迁移时，不应只迁移shard对应的key-value值，还应该迁移去重表
+	Shard int
 }
 
 type ShardKV struct {
@@ -55,7 +58,7 @@ type ShardKV struct {
 	database DataBase
 	//接受某个index对应的消息
 	waitChan map[int]chan *CommandReply
-	//保存上一次的结果
+	//去重表,保存上一次的结果
 	commandApplyTable map[int64]*LastApply
 	//超时重发时间
 	timeout time.Duration
@@ -79,14 +82,52 @@ type ShardKV struct {
 	config shardctrler.Config
 }
 
+//复制shard对应的去重表
+func (kv *ShardKV) getCommandApplyTableL(shard int) map[int64]*LastApply {
+	result := make(map[int64]*LastApply)
+	for k, v := range kv.commandApplyTable {
+		if v.Shard == shard {
+			reply := CommandReply{
+				Err:               v.CommandReply.Err,
+				Value:             v.CommandReply.Value,
+				Data:              v.CommandReply.Data,
+				CommandApplyTable: v.CommandReply.CommandApplyTable,
+				ConfigNum:         v.CommandReply.ConfigNum,
+			}
+			result[k] = &LastApply{
+				CommandId:    v.CommandId,
+				CommandReply: &reply,
+				Shard:        v.Shard,
+			}
+		}
+	}
+	return result
+}
+
+func (kv *ShardKV) setCommandApplyTableL(data map[int64]*LastApply) {
+	for k, v := range data {
+		kv.commandApplyTable[k] = v
+	}
+}
+func (kv *ShardKV) delCommandApplyTableL(shard int) {
+	var result []int64
+	for k, v := range kv.commandApplyTable {
+		if v.Shard == shard {
+			result = append(result, k)
+		}
+	}
+	for _, k := range result {
+		delete(kv.commandApplyTable, k)
+	}
+}
 func (kv *ShardKV) newWaitChan(index int) chan *CommandReply {
-	kv.waitChan[index] = make(chan *CommandReply)
+	kv.waitChan[index] = make(chan *CommandReply, 2)
 	return kv.waitChan[index]
 }
 func (kv *ShardKV) delWaitChanUL(index int) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	//close(kv.waitChan[index])
+	close(kv.waitChan[index])
 	delete(kv.waitChan, index)
 	//kv.waitChan = make(map[int]chan *CommandReply)
 }
@@ -124,7 +165,6 @@ func (kv *ShardKV) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	}
 	var index int
 	var isLeader bool
-	//op.Term, _ = kv.rf.GetState()
 	index, _, isLeader = kv.rf.Start(op)
 	if isLeader == false {
 		reply.Err = ErrWrongLeader
@@ -203,6 +243,7 @@ func (kv *ShardKV) dealKVCommand(op *Op, applyCommand *raft.ApplyMsg) {
 			kv.commandApplyTable[op.ClientId] = &LastApply{
 				CommandId:    op.CommandId,
 				CommandReply: reply,
+				Shard:        key2shard(op.Key),
 			}
 		}
 
@@ -224,27 +265,33 @@ func (kv *ShardKV) dealChangeConfig(op *Op, applyCommand *raft.ApplyMsg) {
 	if reply.ConfigNum == op.ConfigNum {
 		kv.lastApplyIndex = applyCommand.CommandIndex
 		//返回数据并停止服务
-		DPrintf("[gid-%v-me-%v]", kv.gid, kv.me)
+		//DPrintf("[gid-%v-me-%v]", kv.gid, kv.me)
 		if op.Opt == GetShard {
 			reply.Data = kv.database.GetShard(op.Shard)
+			reply.CommandApplyTable = kv.getCommandApplyTableL(op.Shard)
+
 			kv.isServeShard[op.Shard] = false
-			kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
+			//不需要snapshot时停止执行
+			if kv.maxraftstate != -1 {
+				kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
+			}
+
 		} else if op.Opt == SetShard {
 			kv.database.SetShard(op.Data)
+			kv.setCommandApplyTableL(op.CommandApplyTable)
 		} else if op.Opt == DeleteShard {
 			kv.database.DelShard(op.Shard)
+			kv.delCommandApplyTableL(op.Shard)
 		} else if op.Opt == BeginServeShard {
 			kv.isServeShard[op.Shard] = true
-			kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
+			if kv.maxraftstate != -1 {
+				kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
+			}
 		} else if op.Opt == ChangeConfigNum {
-			//if kv.gid == 100 {
-			//	DPrintf("[100]Begin2")
-			//}
 			kv.config = kv.mck.Query(op.ConfigNum + 1)
-			kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
-			//if kv.gid == 100 {
-			//	DPrintf("[100]Begin3")
-			//}
+			if kv.maxraftstate != -1 {
+				kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
+			}
 		}
 	}
 
@@ -410,7 +457,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.database = DataBase{Table: make(map[string]string, 10)}
 	kv.waitChan = make(map[int]chan *CommandReply, 10)
 	kv.commandApplyTable = make(map[int64]*LastApply, 10)
-	kv.timeout = time.Duration(100) * time.Millisecond
+	kv.timeout = time.Duration(500) * time.Millisecond
 	kv.lastApplyIndex = 0
 
 	kv.state = -1

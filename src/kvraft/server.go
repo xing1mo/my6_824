@@ -300,7 +300,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.database = DataBase{Table: make(map[string]string, 10)}
 	kv.waitChan = make(map[int]chan *CommandReply, 10)
 	kv.commandApplyTable = make(map[int64]*LastApply, 10)
-	kv.timeout = time.Duration(100) * time.Millisecond
+	kv.timeout = time.Duration(500) * time.Millisecond
 	kv.lastApplyIndex = 0
 	//kv.lastSnapshotIndex = 0
 

@@ -73,27 +73,35 @@ func (ck *Clerk) sendCommand(key string, value string, op Opt) string {
 		ClientId:  ck.clientId,
 		CommandId: ck.commandId,
 	}
-	DPrintf("[%v]KV-Client--newCommand[%v]--:commandId-%v,%v-%v\n\n", ck.clientId, op, ck.commandId, key, value)
+	DPrintf("[%v]KV-Client--newCommand[%v]--:commandId-%v,%v-%v", ck.clientId, op, ck.commandId, key, value)
 
 	reply := CommandReply{}
 
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
-		if servers, ok := ck.config.Groups[gid]; ok {
+
+		if servers, ok1 := ck.config.Groups[gid]; ok1 {
+			DPrintf("[%v]KV-Client--ReGroup[%v]-configNum-%v--:commandId-%v,%v-%v,shard-%v,gid-%v\n\n", ck.clientId, op, ck.config.Num, ck.commandId, key, value, shard, gid)
+
 			// try each server for the shard.
 			for {
-				DPrintf("send")
+				//DPrintf("send")
 				ok := ck.make_end(servers[ck.leaderId]).Call("ShardKV.ReceiveCommand", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
 					//DPrintf("[%v]Server--receiveCommand--:commandId-%v,%v-Key-%v-value-%v-resultValue-%v", args.ClientId, args.CommandId, args.Op, args.Key, args.Value, reply.Value)
 					ck.commandId++
 					return reply.Value
 				}
-				if ok && (reply.Err == ErrWrongGroup) {
+				if ok && (reply.Err == ErrWrongGroup || reply.Err == "") {
 					break
 				}
 				ck.leaderId = (ck.leaderId + 1) % len(servers)
+				DPrintf("[%v]KV-Client--ReLeader[%v]--:commandId-%v,%v-%v,shard-%v,gid-%v,leaderId-%v\n\n", ck.clientId, op, ck.commandId, key, value, shard, gid, ck.leaderId)
+				//当call失败时,可能是某个节点掉线了,也可能是整个group掉了,因此在访问完整个group所有节点命令还没成功执行时,应该尝试更新配置
+				if ck.leaderId == 0 {
+					break
+				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)

@@ -89,7 +89,9 @@ type PullShardArgs struct {
 }
 type PullShardReply struct {
 	Data map[string]string
-	Err  string
+	//数据迁移时应该还要迁移一个shard对应的去重表
+	CommandApplyTable map[int64]*LastApply
+	Err               string
 }
 
 //向pull端回复数据
@@ -112,7 +114,6 @@ func (kv *ShardKV) PushShard(args *PullShardArgs, reply *PullShardReply) {
 	}
 	var index int
 	var isLeader bool
-	//op.Term, _ = kv.rf.GetState()
 	index, _, isLeader = kv.rf.Start(op)
 	if isLeader == false {
 		reply.Err = ErrWrongLeader
@@ -123,7 +124,10 @@ func (kv *ShardKV) PushShard(args *PullShardArgs, reply *PullShardReply) {
 	kv.mu.Unlock()
 	select {
 	case result := <-ch:
-		reply.Data, reply.Err = result.Data, OK
+		reply.Data, reply.CommandApplyTable, reply.Err = result.Data, result.CommandApplyTable, OK
+		kv.mu.Lock()
+		DPrintf("[gid-%v-me-%v]:[EndServeShard-%v],config-%v", kv.gid, kv.me, args.Shard, kv.config.Num)
+		kv.mu.Unlock()
 	case <-time.After(kv.timeout):
 		reply.Err = Timeout
 		//DPrintf("[%v]client--Timeout--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
@@ -139,7 +143,7 @@ func (kv *ShardKV) pullShard(shard int) {
 		Shard:     shard,
 		ConfigNum: kv.config.Num,
 	}
-	DPrintf("[gid-%v-me-%v]:[pullShard]-Begin-shard-%v from gid-%v,config-%v", kv.gid, kv.me, shard, gid, args.ConfigNum)
+	//DPrintf("[gid-%v-me-%v]:[pullShard]-Begin-shard-%v from gid-%v,config-%v", kv.gid, kv.me, shard, gid, args.ConfigNum)
 	reply := PullShardReply{}
 
 	if servers, ok := kv.config.Groups[gid]; ok {
@@ -157,16 +161,16 @@ func (kv *ShardKV) pullShard(shard int) {
 				//成功拉取数据,同步到整个集群
 				DPrintf("[gid-%v-me-%v]:[pullShard]-Success-shard-%v from gid-%v,data-%v,config-%v", kv.gid, kv.me, shard, gid, reply.Data, args.ConfigNum)
 				op := Op{
-					Opt:       SetShard,
-					Shard:     args.Shard,
-					ConfigNum: args.ConfigNum,
-					Data:      reply.Data,
+					Opt:               SetShard,
+					Shard:             args.Shard,
+					ConfigNum:         args.ConfigNum,
+					Data:              reply.Data,
+					CommandApplyTable: reply.CommandApplyTable,
 				}
 				var index int
 				var isLeader bool
 				for {
 					kv.mu.Lock()
-					//op.Term, _ = kv.rf.GetState()
 					index, _, isLeader = kv.rf.Start(op)
 					if isLeader == false {
 						kv.mu.Unlock()
@@ -230,7 +234,6 @@ func (kv *ShardKV) GCReceive(args *GCArgs, reply *GCReply) {
 	}
 	var index int
 	var isLeader bool
-	//op.Term, _ = kv.rf.GetState()
 	index, _, isLeader = kv.rf.Start(op)
 	if isLeader == false {
 		reply.Err = ErrWrongLeader
@@ -265,7 +268,7 @@ func (kv *ShardKV) sendGC(shard int) {
 		Shard:     shard,
 		ConfigNum: kv.config.Num,
 	}
-	DPrintf("[gid-%v-me-%v]:[sendGC]-Begin-shard-%v to gid-%v", kv.gid, kv.me, shard, gid)
+	//DPrintf("[gid-%v-me-%v]:[sendGC]-Begin-shard-%v from gid-%v", kv.gid, kv.me, shard, gid)
 	reply := GCReply{}
 
 	if servers, ok := kv.config.Groups[gid]; ok {
@@ -280,7 +283,7 @@ func (kv *ShardKV) sendGC(shard int) {
 			}
 			kv.mu.Unlock()
 			if ok && reply.Err == OK {
-				DPrintf("[gid-%v-me-%v]:[sendGC]-Success-shard-%v to gid-%v", kv.gid, kv.me, shard, gid)
+				DPrintf("[gid-%v-me-%v]:[sendGC]-Success-shard-%v from gid-%v", kv.gid, kv.me, shard, gid)
 
 				//开始服务
 				kv.beginServeShard(args.Shard, args.ConfigNum)
@@ -306,7 +309,7 @@ func (kv *ShardKV) checkChangeConfigL(configNum int) bool {
 	if len(kv.pushPool) != 0 || len(kv.pullPool) != 0 || kv.config.Num != configNum || kv.state != kv.config.Num {
 		return false
 	}
-	DPrintf("[gid-%v-me-%v]:[AddConfigNum-%v]-Begin", kv.gid, kv.me, kv.config.Num)
+	//DPrintf("[gid-%v-me-%v]:[AddConfigNum-%v]-Begin", kv.gid, kv.me, kv.config.Num)
 	return true
 }
 
@@ -320,21 +323,16 @@ func (kv *ShardKV) changeConfig(configNum int) {
 	var isLeader bool
 	for {
 		kv.mu.Lock()
-		//op.Term, _ = kv.rf.GetState()
 		index, _, isLeader = kv.rf.Start(op)
 		if isLeader == false {
 			kv.mu.Unlock()
 			return
 		}
-		//if kv.gid == 100 {
-		//	DPrintf("[100]Begin1")
-		//}
 		ch := kv.newWaitChan(index)
 		kv.mu.Unlock()
 		select {
 		case <-ch:
-			DPrintf("[gid-%v-me-%v]:WantSuccess2", kv.gid, kv.me)
-
+			//DPrintf("[gid-%v-me-%v]:WantSuccess2", kv.gid, kv.me)
 			kv.mu.Lock()
 			kv.state = -1
 			DPrintf("[gid-%v-me-%v]:[AddConfigNum-%v]-Success", kv.gid, kv.me, kv.config.Num)
@@ -360,11 +358,10 @@ func (kv *ShardKV) beginServeShard(shard int, configNum int) {
 	var index int
 	var isLeader bool
 	kv.mu.Lock()
-	DPrintf("[gid-%v-me-%v]:[BeginServeShard-%v]-Begin,config-%v", kv.gid, kv.me, shard, kv.config.Num)
+	//DPrintf("[gid-%v-me-%v]:[BeginServeShard-%v]-Begin,config-%v", kv.gid, kv.me, shard, kv.config.Num)
 	kv.mu.Unlock()
 	for {
 		kv.mu.Lock()
-		//op.Term, _ = kv.rf.GetState()
 		index, _, isLeader = kv.rf.Start(op)
 		if isLeader == false {
 			kv.mu.Unlock()

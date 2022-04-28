@@ -56,8 +56,9 @@ type CommandReply struct {
 	Err   Err
 	Value string
 
-	Data      map[string]string
-	ConfigNum int
+	Data              map[string]string
+	CommandApplyTable map[int64]*LastApply
+	ConfigNum         int
 }
 
 // Put or Append
