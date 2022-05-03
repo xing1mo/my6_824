@@ -134,36 +134,40 @@ func (kv *KVServer) listenApply() {
 				if applyCommand.CommandValid {
 					op := applyCommand.Command.(Op)
 					kv.mu.Lock()
-
-					//因可能多次提交,重复的commit就不执行了
-					if _, ok := kv.DuplicationCommand(op.ClientId, op.CommandId); ok && op.Opt != GET {
+					if applyCommand.CommandIndex <= kv.lastApplyIndex {
+						//小概率出现snapshot先提交进chan但未执行,重复在snapshot里的command同时提交的情况,导致命令重复执行，需在命令执行处特判。
 						kv.mu.Unlock()
 					} else {
-						//应用到数据库
-						//对数据库操作要上锁,防止state改了但applyIndex没改,快照出错
-						if op.Opt == GET {
-							reply.Value, reply.Err = kv.database.Get(op.Key)
-						} else if op.Opt == PUT {
-							reply.Err = kv.database.Put(op.Key, op.Value)
+						//因可能多次提交,重复的commit就不执行了
+						if _, ok := kv.DuplicationCommand(op.ClientId, op.CommandId); ok && op.Opt != GET {
+							kv.mu.Unlock()
 						} else {
-							reply.Err = kv.database.Append(op.Key, op.Value)
-						}
-
-						kv.lastApplyIndex = applyCommand.CommandIndex
-						//不是leader不提交结果
-						currentTerm, isLeader := kv.rf.GetState()
-						//保存上一次执行结果以及通知返回结果
-						if op.Opt != GET {
-							kv.commandApplyTable[op.ClientId] = &LastApply{
-								CommandId:    op.CommandId,
-								CommandReply: reply,
+							//应用到数据库
+							//对数据库操作要上锁,防止state改了但applyIndex没改,快照出错
+							if op.Opt == GET {
+								reply.Value, reply.Err = kv.database.Get(op.Key)
+							} else if op.Opt == PUT {
+								reply.Err = kv.database.Put(op.Key, op.Value)
+							} else {
+								reply.Err = kv.database.Append(op.Key, op.Value)
 							}
+
+							kv.lastApplyIndex = applyCommand.CommandIndex
+							//不是leader不提交结果
+							currentTerm, isLeader := kv.rf.GetState()
+							//保存上一次执行结果以及通知返回结果
+							if op.Opt != GET {
+								kv.commandApplyTable[op.ClientId] = &LastApply{
+									CommandId:    op.CommandId,
+									CommandReply: reply,
+								}
+							}
+							//仅在我等结果,并且我是Leader,term没有改变的情况下才返回,否则index被覆盖了导致错误
+							if ch, ok := kv.waitChan[applyCommand.CommandIndex]; ok && isLeader && currentTerm == applyCommand.CommandTerm {
+								ch <- reply
+							}
+							kv.mu.Unlock()
 						}
-						//仅在我等结果,并且我是Leader,term没有改变的情况下才返回,否则index被覆盖了导致错误
-						if ch, ok := kv.waitChan[applyCommand.CommandIndex]; ok && isLeader && currentTerm == applyCommand.CommandTerm {
-							ch <- reply
-						}
-						kv.mu.Unlock()
 					}
 				} else if applyCommand.SnapshotValid && kv.rf.CondInstallSnapshot(applyCommand.SnapshotTerm, applyCommand.SnapshotIndex, applyCommand.Snapshot) {
 					kv.mu.Lock()
