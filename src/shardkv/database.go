@@ -34,6 +34,18 @@ func (db *DataBase) Append(key string, value string) Err {
 	return OK
 }
 
+//是否有对应数据
+func (db *DataBase) HasShard(shard int) bool {
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
+	for k, _ := range db.Table {
+		if key2shard(k) == shard {
+			return true
+		}
+	}
+	return false
+}
+
 func (db *DataBase) GetShard(shard int) map[string]string {
 	db.Mu.Lock()
 	defer db.Mu.Unlock()

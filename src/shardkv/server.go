@@ -27,12 +27,12 @@ type Op struct {
 	Shard             int
 	ConfigNum         int
 	Data              map[string]string
-	CommandApplyTable map[int64]*LastApply
+	CommandApplyTable map[int64]LastApply
 }
 
 type LastApply struct {
 	CommandId    int
-	CommandReply *CommandReply
+	CommandReply CommandReply
 	//进行shard数据迁移时，不应只迁移shard对应的key-value值，还应该迁移去重表
 	Shard int
 }
@@ -59,7 +59,7 @@ type ShardKV struct {
 	//接受某个index对应的消息
 	waitChan map[int]chan *CommandReply
 	//去重表,保存上一次的结果
-	commandApplyTable map[int64]*LastApply
+	commandApplyTable map[int64]LastApply
 	//超时重发时间
 	timeout time.Duration
 	//提交该命令时的Term
@@ -83,8 +83,8 @@ type ShardKV struct {
 }
 
 //复制shard对应的去重表
-func (kv *ShardKV) getCommandApplyTableL(shard int) map[int64]*LastApply {
-	result := make(map[int64]*LastApply)
+func (kv *ShardKV) getCommandApplyTableL(shard int) map[int64]LastApply {
+	result := make(map[int64]LastApply)
 	for k, v := range kv.commandApplyTable {
 		if v.Shard == shard {
 			reply := CommandReply{
@@ -94,9 +94,9 @@ func (kv *ShardKV) getCommandApplyTableL(shard int) map[int64]*LastApply {
 				CommandApplyTable: v.CommandReply.CommandApplyTable,
 				ConfigNum:         v.CommandReply.ConfigNum,
 			}
-			result[k] = &LastApply{
+			result[k] = LastApply{
 				CommandId:    v.CommandId,
-				CommandReply: &reply,
+				CommandReply: reply,
 				Shard:        v.Shard,
 			}
 		}
@@ -104,9 +104,13 @@ func (kv *ShardKV) getCommandApplyTableL(shard int) map[int64]*LastApply {
 	return result
 }
 
-func (kv *ShardKV) setCommandApplyTableL(data map[int64]*LastApply) {
+func (kv *ShardKV) setCommandApplyTableL(data map[int64]LastApply) {
 	for k, v := range data {
-		kv.commandApplyTable[k] = v
+		//虽然客户端的请求是串行的,但以前的请求在某个group留下的去重表在pull操作时会覆盖其他group,需要特判
+		if mydata, ok := kv.commandApplyTable[k]; (ok && v.CommandId > mydata.CommandId) || !ok {
+			kv.commandApplyTable[k] = v
+		}
+
 	}
 }
 func (kv *ShardKV) delCommandApplyTableL(shard int) {
@@ -133,18 +137,18 @@ func (kv *ShardKV) delWaitChanUL(index int) {
 }
 
 //判断是否是重复命令
-func (kv *ShardKV) DuplicationCommand(clientId int64, commandId int) (*CommandReply, bool) {
+func (kv *ShardKV) DuplicationCommand(clientId int64, commandId int) (CommandReply, bool) {
 	if lastApply, ok := kv.commandApplyTable[clientId]; ok && lastApply.CommandId == commandId {
 		return lastApply.CommandReply, true
 	}
-	return nil, false
+	return CommandReply{}, false
 }
 func (kv *ShardKV) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	kv.mu.Lock()
 
 	//不是我服务的shard
 	if !kv.isServeShard[key2shard(args.Key)] {
-		DPrintf("[gid-%v-me-%v]--ErrWrongGroup--:from [%v] commandId-%v", kv.gid, kv.me, args.ClientId, args.CommandId)
+		DPrintf("[gid-%v-me-%v]--ErrWrongGroup--:from [%v] commandId-%v,[configNum-%v]", kv.gid, kv.me, args.ClientId, args.CommandId, kv.config.Num)
 		reply.Err = ErrWrongGroup
 		kv.mu.Unlock()
 		return
@@ -152,7 +156,7 @@ func (kv *ShardKV) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	if reply1, ok := kv.DuplicationCommand(args.ClientId, args.CommandId); ok && args.Op != GET {
 		reply.Value, reply.Err = reply1.Value, reply1.Err
 		//DPrintf("[%v]client--DuplicationCommand--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
-		DPrintf("[gid-%v-me-%v]--DuplicationCommand--:from [%v] commandId-%v", kv.gid, kv.me, args.ClientId, args.CommandId)
+		DPrintf("[gid-%v-me-%v]--DuplicationCommand--:from [%v] commandId-%v,[configNum-%v]", kv.gid, kv.me, args.ClientId, args.CommandId, kv.config.Num)
 		kv.mu.Unlock()
 		return
 	}
@@ -168,22 +172,29 @@ func (kv *ShardKV) ReceiveCommand(args *CommandArgs, reply *CommandReply) {
 	index, _, isLeader = kv.rf.Start(op)
 	if isLeader == false {
 		reply.Err = ErrWrongLeader
-		DPrintf("[gid-%v-me-%v]--NotLeader--:from [%v] commandId-%v", kv.gid, kv.me, args.ClientId, args.CommandId)
+		DPrintf("[gid-%v-me-%v]--NotLeader--:from [%v] commandId-%v,[configNum-%v]", kv.gid, kv.me, args.ClientId, args.CommandId, kv.config.Num)
 
 		//DPrintf("[%v]client--NotLeader--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
 		kv.mu.Unlock()
 		return
 	}
-	DPrintf("[gid-%v-me-%v]--BeginCommand--:shard-%v-%v-Key-%v-value-%v-resultValue-%v,from [%v] commandId-%v", kv.gid, kv.me, key2shard(args.Key), args.Op, args.Key, args.Value, reply.Value, args.ClientId, args.CommandId)
+	DPrintf("[gid-%v-me-%v]--BeginCommand--:shard-%v-%v-Key-%v-value-%v-resultValue-%v,from [%v] commandId-%v,[configNum-%v]", kv.gid, kv.me, key2shard(args.Key), args.Op, args.Key, args.Value, reply.Value, args.ClientId, args.CommandId, kv.config.Num)
+	DPrintf("[gid-%v-me-%v]--ApplyTable--:%v,[configNum-%v]", kv.gid, kv.me, kv.commandApplyTable, kv.config.Num)
 
 	ch := kv.newWaitChan(index)
 	kv.mu.Unlock()
 	select {
 	case result := <-ch:
-		reply.Value, reply.Err = result.Value, result.Err
-		DPrintf("[gid-%v-me-%v]--SuccessCommand--:shard-%v-%v-Key-%v-value-%v-resultValue-%v,from [%v] commandId-%v", kv.gid, kv.me, key2shard(args.Key), args.Op, args.Key, args.Value, reply.Value, args.ClientId, args.CommandId)
+		kv.mu.Lock()
+		if !kv.isServeShard[key2shard(op.Key)] {
+			reply.Err = ErrWrongGroup
+		} else {
+			reply.Value, reply.Err = result.Value, result.Err
+			DPrintf("[gid-%v-me-%v]--SuccessCommand--:shard-%v-%v-Key-%v-value-%v-resultValue-%v,from [%v] commandId-%v,[configNum-%v]", kv.gid, kv.me, key2shard(args.Key), args.Op, args.Key, args.Value, reply.Value, args.ClientId, args.CommandId, kv.config.Num)
+			DPrintf("[gid-%v-me-%v]--ApplyTable--:%v,[configNum-%v]", kv.gid, kv.me, kv.commandApplyTable, kv.config.Num)
 
-		//DPrintf("[%v]client--SuccessCommand--:from [%v] commandId-%v,%v-Key-%v-value-%v-resultValue-%v", kv.me, args.ClientId, args.CommandId, args.Op, args.Key, args.Value, reply.Value)
+		}
+		kv.mu.Unlock()
 	case <-time.After(kv.timeout):
 		reply.Err = Timeout
 		//DPrintf("[%v]client--Timeout--:from [%v] commandId-%v", kv.me, args.ClientId, args.CommandId)
@@ -198,13 +209,19 @@ func (kv *ShardKV) listenApply() {
 		case applyCommand := <-kv.applyCh:
 			{
 				if applyCommand.CommandValid {
-					op := applyCommand.Command.(Op)
-					if op.Opt == PUT || op.Opt == GET || op.Opt == APPEND {
-						kv.dealKVCommand(&op, &applyCommand)
+					kv.mu.Lock()
+					if applyCommand.CommandIndex <= kv.lastApplyIndex {
+						//小概率出现snapshot先提交进chan但未执行,重复在snapshot里的command同时提交的情况,导致命令重复执行，需在命令执行处特判。
+						kv.mu.Unlock()
 					} else {
-						kv.dealChangeConfig(&op, &applyCommand)
+						kv.mu.Unlock()
+						op := applyCommand.Command.(Op)
+						if op.Opt == PUT || op.Opt == GET || op.Opt == APPEND {
+							kv.dealKVCommand(&op, &applyCommand)
+						} else {
+							kv.dealChangeConfig(&op, &applyCommand)
+						}
 					}
-
 				} else if applyCommand.SnapshotValid && kv.rf.CondInstallSnapshot(applyCommand.SnapshotTerm, applyCommand.SnapshotIndex, applyCommand.Snapshot) {
 					kv.mu.Lock()
 					kv.lastApplyIndex = applyCommand.SnapshotIndex
@@ -224,6 +241,10 @@ func (kv *ShardKV) dealKVCommand(op *Op, applyCommand *raft.ApplyMsg) {
 	//因可能多次提交,重复的commit就不执行了
 	if _, ok := kv.DuplicationCommand(op.ClientId, op.CommandId); ok && op.Opt != GET {
 		kv.mu.Unlock()
+	} else if !kv.isServeShard[key2shard(op.Key)] {
+		//有可能command提交成功但没有apply时就挂掉了,数据发生迁移,但是是旧数据,
+		//后续旧group的command重新apply并返回结果会导致命令不重放,新group数据迁移拿到的实际上是旧的数据
+		kv.mu.Unlock()
 	} else {
 		//应用到数据库
 		//对数据库操作要上锁,防止state改了但applyIndex没改,快照出错
@@ -234,15 +255,15 @@ func (kv *ShardKV) dealKVCommand(op *Op, applyCommand *raft.ApplyMsg) {
 		} else {
 			reply.Err = kv.database.Append(op.Key, op.Value)
 		}
-
+		//DPrintf("[gid-%v-me-%v]--Apply--:shard-%v-%v-Key-%v-value-%v-resultValue-%v,from [%v] commandId-%v,[configNum-%v]", kv.gid, kv.me, key2shard(op.Key), op.Opt, op.Key, op.Value, reply.Value, op.ClientId, op.CommandId, kv.config.Num)
 		kv.lastApplyIndex = applyCommand.CommandIndex
 		//不是leader不提交结果
 		currentTerm, isLeader := kv.rf.GetState()
 		//保存上一次执行结果以及通知返回结果
 		if op.Opt != GET {
-			kv.commandApplyTable[op.ClientId] = &LastApply{
+			kv.commandApplyTable[op.ClientId] = LastApply{
 				CommandId:    op.CommandId,
-				CommandReply: reply,
+				CommandReply: *reply,
 				Shard:        key2shard(op.Key),
 			}
 		}
@@ -272,9 +293,9 @@ func (kv *ShardKV) dealChangeConfig(op *Op, applyCommand *raft.ApplyMsg) {
 
 			kv.isServeShard[op.Shard] = false
 			//不需要snapshot时停止执行
-			if kv.maxraftstate != -1 {
-				kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
-			}
+			//if kv.maxraftstate != -1 {
+			//	kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
+			//}
 
 		} else if op.Opt == SetShard {
 			kv.database.SetShard(op.Data)
@@ -284,14 +305,14 @@ func (kv *ShardKV) dealChangeConfig(op *Op, applyCommand *raft.ApplyMsg) {
 			kv.delCommandApplyTableL(op.Shard)
 		} else if op.Opt == BeginServeShard {
 			kv.isServeShard[op.Shard] = true
-			if kv.maxraftstate != -1 {
-				kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
-			}
+			//if kv.maxraftstate != -1 {
+			//	kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
+			//}
 		} else if op.Opt == ChangeConfigNum {
 			kv.config = kv.mck.Query(op.ConfigNum + 1)
-			if kv.maxraftstate != -1 {
-				kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
-			}
+			//if kv.maxraftstate != -1 {
+			//	kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
+			//}
 		}
 	}
 
@@ -315,12 +336,24 @@ func (kv *ShardKV) listenSnapshot() {
 		kv.mu.Lock()
 		if kv.rf.GetPersist().RaftStateSize() >= kv.maxraftstate/4*3 {
 			kv.rf.Snapshot(kv.lastApplyIndex, kv.getSnapshotL())
-			for s, s2 := range kv.database.Table {
-				DPrintf("listenSnapshot:%v--%v\n\n", s, s2)
-			}
+			//for s, s2 := range kv.database.Table {
+			//	DPrintf("listenSnapshot:%v--%v\n\n", s, s2)
+			//}
 		}
 		kv.mu.Unlock()
 		time.Sleep(time.Duration(10) * time.Millisecond)
+	}
+}
+
+//定期打印数据方便调试
+func (kv *ShardKV) printData() {
+	for !kv.killed() {
+		kv.mu.Lock()
+		for s, s2 := range kv.database.Table {
+			DPrintf("[gid-%v-me-%v]listenSnapshot:%v--%v\n\n", kv.gid, kv.me, s, s2)
+		}
+		kv.mu.Unlock()
+		time.Sleep(time.Duration(100) * time.Millisecond)
 	}
 }
 
@@ -353,7 +386,7 @@ func (kv *ShardKV) setSnapshot(data []byte) {
 
 	var Table map[string]string
 	//var waitChan map[int]chan *CommandReply
-	var commandApplyTable map[int64]*LastApply
+	var commandApplyTable map[int64]LastApply
 
 	var isServeShard [shardctrler.NShards]bool
 	var config shardctrler.Config
@@ -380,6 +413,7 @@ func (kv *ShardKV) setSnapshot(data []byte) {
 		//	DPrintf("listenSnapshot:%v--%v\n\n", s, s2)
 		//}
 		//kv.mu.Unlock()
+
 	}
 }
 
@@ -456,7 +490,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// Your initialization code here.
 	kv.database = DataBase{Table: make(map[string]string, 10)}
 	kv.waitChan = make(map[int]chan *CommandReply, 10)
-	kv.commandApplyTable = make(map[int64]*LastApply, 10)
+	kv.commandApplyTable = make(map[int64]LastApply, 10)
 	kv.timeout = time.Duration(500) * time.Millisecond
 	kv.lastApplyIndex = 0
 
@@ -470,6 +504,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	//读取snapshot
 	kv.setSnapshot(persister.ReadSnapshot())
+	DPrintf("[gid-%v-me-%v]--Reboot--:table-%v,applyCommandTable-%v,[configNum-%v]\n\n", kv.gid, kv.me, kv.database.Table, kv.commandApplyTable, kv.config.Num)
+
 	// You may need initialization code here.
 
 	if maxraftstate != -1 {
@@ -478,5 +514,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.listenApply()
 	go kv.listenConfigChange()
 	go kv.listenIsNotLeader()
+
+	//go kv.printData()
 	return kv
 }

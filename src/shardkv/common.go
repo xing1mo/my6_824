@@ -57,7 +57,7 @@ type CommandReply struct {
 	Value string
 
 	Data              map[string]string
-	CommandApplyTable map[int64]*LastApply
+	CommandApplyTable map[int64]LastApply
 	ConfigNum         int
 }
 
