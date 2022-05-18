@@ -28,6 +28,7 @@ mrtmp.*
 /shardctrler/tester
 /shardctrler/tmp.txt
 
+/go-test-many.sh
 /shardkv/go-test-many.sh
 /shardkv/test-*.log
 /shardkv/test-*.err
