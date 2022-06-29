@@ -120,6 +120,8 @@ func (rf *Raft) updateCommitIndexL() {
 	copy(tmp, rf.matchIndex)
 	tmp[rf.me] = rf.log.getLastIndexL()
 	sort.Ints(tmp)
+
+	// 这里全是奇数数节点，如果有偶数节点应该要tmp[(len(rf.peers)-1)/2]
 	nxtCommitMax := tmp[len(rf.peers)/2]
 
 	//DPrintf("[%v]--matchIndex-%v,nxtCommitMax-%v,Index0-%v\n\n", rf.me, rf.matchIndex, nxtCommitMax, rf.log.getIndexIndexL(0))
